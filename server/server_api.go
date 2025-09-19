@@ -1,3 +1,5 @@
 package server
 
-type Server interface{}
+type Server interface {
+	Run(addr, replicaId string) error
+}
