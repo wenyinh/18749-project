@@ -17,12 +17,13 @@ const (
 )
 
 type server struct {
-	replicaId   string
-	serverState int
+	Addr        string
+	ReplicaId   string
+	ServerState int
 }
 
-func NewServer(replicaId string, serverState int) Server {
-	return &server{replicaId, serverState}
+func NewServer(addr, replicaId string, serverState int) Server {
+	return &server{addr, replicaId, serverState}
 }
 
 func (s *server) handleConnection(conn net.Conn) {
@@ -30,7 +31,7 @@ func (s *server) handleConnection(conn net.Conn) {
 		_ = conn.Close()
 	}()
 	r := bufio.NewReader(conn)
-	log.Printf("[SERVER][%s] connected to %s", s.replicaId, conn.RemoteAddr())
+	log.Printf("[SERVER][%s] connected to %s", s.ReplicaId, conn.RemoteAddr())
 	for {
 		line, err := utils.ReadLine(r)
 		if err != nil {
@@ -39,7 +40,7 @@ func (s *server) handleConnection(conn net.Conn) {
 		if line == Ping {
 			err := utils.WriteLine(conn, Pong)
 			if err == nil {
-				log.Printf("[SERVER][%s] heartbeat, sent pong to LFD", s.replicaId)
+				log.Printf("[SERVER][%s] heartbeat, sent pong to LFD", s.ReplicaId)
 			}
 		} else if strings.HasPrefix(line, Req) {
 			// Client sent: REQ <client_id> <req_id>
@@ -49,28 +50,27 @@ func (s *server) handleConnection(conn net.Conn) {
 			}
 			clientId := parts[1]
 			requestId := parts[2]
-			log.Printf("[SERVER][%s] received request from client, clientId: %s, request ID: %s", s.replicaId, clientId, requestId)
-			log.Printf("[SERVER][%s] state before: %d", s.replicaId, s.serverState)
-			s.serverState++
-			log.Printf("[SERVER][%s] state after: %d", s.replicaId, s.serverState)
-			// RSP <clientId> <reqId> <serverState>
-			_ = utils.WriteLine(conn, Resp+clientId+" "+requestId+" "+strconv.Itoa(s.serverState))
-			log.Printf("[SERVER][%s] reply to client, clientId: %s, requestId: %s, server state: %d", s.replicaId, clientId, requestId, s.serverState)
+			log.Printf("[SERVER][%s] received request from client, clientId: %s, request ID: %s", s.ReplicaId, clientId, requestId)
+			log.Printf("[SERVER][%s] state before: %d", s.ReplicaId, s.ServerState)
+			s.ServerState++
+			log.Printf("[SERVER][%s] state after: %d", s.ReplicaId, s.ServerState)
+			// RSP <clientId> <reqId> <ServerState>
+			_ = utils.WriteLine(conn, Resp+clientId+" "+requestId+" "+strconv.Itoa(s.ServerState))
+			log.Printf("[SERVER][%s] reply to client, clientId: %s, requestId: %s, server state: %d", s.ReplicaId, clientId, requestId, s.ServerState)
 		} else {
 			_ = utils.WriteLine(conn, "ERROR: unknown request")
 		}
 	}
 }
 
-func (s *server) Run(addr, replicaId string) error {
+func (s *server) Run() error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	s.replicaId = replicaId
-	listener := utils.MustListen(addr)
-	log.Printf("[SERVER][%s] listening on %s", s.replicaId, addr)
+	listener := utils.MustListen(s.Addr)
+	log.Printf("[SERVER][%s] listening on %s", s.ReplicaId, s.Addr)
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
-			log.Printf("[SERVER][%s] accept client error: %v", replicaId, err)
+			log.Printf("[SERVER][%s] accept client error: %v", s.ReplicaId, err)
 			continue
 		}
 		go s.handleConnection(conn)
