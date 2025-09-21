@@ -1,8 +1,8 @@
 package client
 
 import (
+	"fmt"
 	"github.com/wenyinh/18749-project/utils"
-	"log"
 	"net"
 )
 
@@ -10,19 +10,24 @@ type client struct {
 	clientID   int
 	serverAddr string
 	conn       net.Conn
+	reqCounter int
 }
 
 func NewClient(clientID int, serverAddr string) Client {
 	return &client{
 		clientID:   clientID,
 		serverAddr: serverAddr,
+		reqCounter: 0,
 	}
 }
 
 func (c *client) Connect() error {
-	conn := utils.MustDial(c.serverAddr)
+	conn, err := utils.MustDial(c.serverAddr)
+	if err != nil {
+		return err
+	}
 	c.conn = conn
-	log.Printf("[C%d] Connected to server S1\n", c.clientID)
+	fmt.Printf("[C%d] Connected to server S1\n", c.clientID)
 	return nil
 }
 
@@ -31,22 +36,22 @@ func (c *client) SendMessage(message string) {
 		log.Printf("[C%d] Not connected to server\n", c.clientID)
 		return
 	}
-	log.Printf("[C%d] Sending request: %s\n", c.clientID, message)
+	fmt.Printf("[C%d] Sending request: %s\n", c.clientID, message)
 	err := utils.WriteLine(c.conn, message)
 	if err != nil {
-		log.Printf("[C%d] Error sending message: %v\n", c.clientID, err)
+		fmt.Printf("[C%d] Error sending message: %v\n", c.clientID, err)
 		return
 	}
 
-	// Receive and print reply
-	buffer := make([]byte, 1024)
-	n, err := c.conn.Read(buffer)
+	// Read exactly one line reply
+	br := bufio.NewReader(c.conn)
+	reply, err := utils.ReadLine(br)
 	if err != nil {
 		log.Printf("[C%d] Error receiving reply: %v\n", c.clientID, err)
 		return
 	}
 	reply := string(buffer[:n])
-	log.Printf("[C%d] Received reply: %s\n", c.clientID, reply)
+	fmt.Printf("[C%d] Received reply: %s\n", c.clientID, reply)
 }
 
 func (c *client) Close() {

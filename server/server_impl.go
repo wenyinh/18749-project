@@ -2,11 +2,12 @@ package server
 
 import (
 	"bufio"
-	"github.com/wenyinh/18749-project/utils"
 	"log"
 	"net"
 	"strconv"
 	"strings"
+
+	"github.com/wenyinh/18749-project/utils"
 )
 
 const (
@@ -47,6 +48,7 @@ func (s *server) handleConnection(conn net.Conn) {
 			parts := strings.Split(line, " ")
 			if len(parts) != 3 {
 				_ = utils.WriteLine(conn, "ERROR: invalid request format")
+				continue
 			}
 			clientId := parts[1]
 			requestId := parts[2]
@@ -54,8 +56,8 @@ func (s *server) handleConnection(conn net.Conn) {
 			log.Printf("[SERVER][%s] state before: %d", s.ReplicaId, s.ServerState)
 			s.ServerState++
 			log.Printf("[SERVER][%s] state after: %d", s.ReplicaId, s.ServerState)
-			// RSP <clientId> <reqId> <ServerState>
-			_ = utils.WriteLine(conn, Resp+clientId+" "+requestId+" "+strconv.Itoa(s.ServerState))
+			// RESP <serverId> <clientId> <reqId> <ServerState>
+			_ = utils.WriteLine(conn, Resp+" "+s.ReplicaId+" "+clientId+" "+requestId+" "+strconv.Itoa(s.ServerState))
 			log.Printf("[SERVER][%s] reply to client, clientId: %s, requestId: %s, server state: %d", s.ReplicaId, clientId, requestId, s.ServerState)
 		} else {
 			_ = utils.WriteLine(conn, "ERROR: unknown request")

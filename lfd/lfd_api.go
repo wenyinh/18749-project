@@ -1,3 +1,5 @@
 package lfd
 
-type Lfd interface{}
+type LFD interface {
+	Run() error
+}
