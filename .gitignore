@@ -1,0 +1,26 @@
+# Binaries
+bin/
+*.exe
+
+# Environment files (contain sensitive data)
+.env
+.env.local
+
+# Logs and runtime files
+logs/
+run/
+*.log
+*.pid
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Go build cache
+go.sum
+
+# OS files
+.DS_Store
+Thumbs.db
