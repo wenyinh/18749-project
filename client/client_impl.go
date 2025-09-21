@@ -2,8 +2,8 @@ package client
 
 import (
 	"fmt"
-	"net"
 	"github.com/wenyinh/18749-project/utils"
+	"net"
 )
 
 type client struct {
@@ -11,7 +11,6 @@ type client struct {
 	serverAddr string
 	conn       net.Conn
 }
-
 
 func NewClient(clientID int, serverAddr string) Client {
 	return &client{
@@ -21,10 +20,7 @@ func NewClient(clientID int, serverAddr string) Client {
 }
 
 func (c *client) Connect() error {
-	conn, err := utils.MustDial(c.serverAddr)
-	if err != nil {
-		return err
-	}
+	conn := utils.MustDial(c.serverAddr)
 	c.conn = conn
 	fmt.Printf("[C%d] Connected to server S1\n", c.clientID)
 	return nil
