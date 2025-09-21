@@ -1,3 +1,7 @@
 package client
 
-type Client interface{}
+type Client interface {
+	Connect() error
+	SendMessage(message string)
+	Close()
+}
