@@ -6,9 +6,6 @@ bin/
 .env
 .env.local
 
-# Claude configuration
-CLAUDE.md
-
 # Logs and runtime files
 logs/
 run/
