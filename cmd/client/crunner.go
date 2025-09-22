@@ -22,7 +22,9 @@ func main() {
 		log.Fatalf("failed to connect to server: %v", err)
 	}
 	defer c.Close()
-
+	
 	c.SendMessage("hello world")
 	c.SendMessage("second message")
+	
 }
+
