@@ -36,24 +36,32 @@ echo "1. Starting server..."
 # Give server time to start
 sleep 1
 
-# Start clients (note: new implementation sends two messages and exits)
+# Start clients (long-running)
 echo ""
-echo "2. Starting clients (they will send messages and exit)..."
+echo "2. Starting long-running clients..."
 
-# Run clients directly since they exit quickly
-echo "Running client1..."
-"$BIN_DIR/client" -id "$CLIENT1_ID" -server "$SERVER_ADDR" > "$LOG_DIR/client1.log" 2>&1 &
-sleep 0.1
+echo "Starting client1..."
+"$RUN_SCRIPT" client client1 \
+  -id "$CLIENT1_ID" \
+  -server "$SERVER_ADDR"
 
-echo "Running client2..."
-"$BIN_DIR/client" -id "$CLIENT2_ID" -server "$SERVER_ADDR" > "$LOG_DIR/client2.log" 2>&1 &
-sleep 0.1
-
-echo "Running client3..."
-"$BIN_DIR/client" -id "$CLIENT3_ID" -server "$SERVER_ADDR" > "$LOG_DIR/client3.log" 2>&1 &
 sleep 0.5
 
-echo "Clients have sent their messages (check logs for details)"
+echo "Starting client2..."
+"$RUN_SCRIPT" client client2 \
+  -id "$CLIENT2_ID" \
+  -server "$SERVER_ADDR"
+
+sleep 0.5
+
+echo "Starting client3..."
+"$RUN_SCRIPT" client client3 \
+  -id "$CLIENT3_ID" \
+  -server "$SERVER_ADDR"
+
+sleep 0.5
+
+echo "All clients started and running"
 
 # Start LFD
 echo ""
