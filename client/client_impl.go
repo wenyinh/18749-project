@@ -4,12 +4,14 @@ import (
 	"github.com/wenyinh/18749-project/utils"
 	"log"
 	"net"
+	"strconv"
 )
 
 type client struct {
 	clientID   int
 	serverAddr string
 	conn       net.Conn
+	reqID      int 
 }
 
 func NewClient(clientID int, serverAddr string) Client {
@@ -31,8 +33,11 @@ func (c *client) SendMessage(message string) {
 		log.Printf("[C%d] Not connected to server\n", c.clientID)
 		return
 	}
-	log.Printf("[C%d] Sending request: %s\n", c.clientID, message)
-	err := utils.WriteLine(c.conn, message)
+	c.reqID++
+	fullMsg := "REQ C" + strconv.Itoa(c.clientID) + " " + strconv.Itoa(c.reqID)
+
+	log.Printf("[C%d] Sending request: %s\n", c.clientID, fullMsg)
+	err := utils.WriteLine(c.conn, fullMsg)
 	if err != nil {
 		log.Printf("[C%d] Error sending message: %v\n", c.clientID, err)
 		return

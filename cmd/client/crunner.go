@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"log"
+	"time"
 	"github.com/wenyinh/18749-project/client"
 )
 
@@ -23,8 +24,11 @@ func main() {
 	}
 	defer c.Close()
 	
-	c.SendMessage("hello world")
-	c.SendMessage("second message")
+
+	for {
+		c.SendMessage("hello world")
+		time.Sleep(1 * time.Second)
+	}
 	
 }
 
