@@ -11,7 +11,7 @@ type client struct {
 	clientID   int
 	serverAddr string
 	conn       net.Conn
-	reqID      int 
+	reqID      int
 }
 
 func NewClient(clientID int, serverAddr string) Client {
@@ -28,7 +28,7 @@ func (c *client) Connect() error {
 	return nil
 }
 
-func (c *client) SendMessage(message string) {
+func (c *client) SendMessage() {
 	if c.conn == nil {
 		log.Printf("[C%d] Not connected to server\n", c.clientID)
 		return

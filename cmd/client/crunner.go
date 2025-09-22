@@ -2,11 +2,10 @@ package main
 
 import (
 	"flag"
+	"github.com/wenyinh/18749-project/client"
 	"log"
 	"time"
-	"github.com/wenyinh/18749-project/client"
 )
-
 
 func main() {
 	serverAddr := flag.String("server", "127.0.0.1:9000", "server address to connect")
@@ -23,12 +22,10 @@ func main() {
 		log.Fatalf("failed to connect to server: %v", err)
 	}
 	defer c.Close()
-	
 
 	for {
-		c.SendMessage("hello world")
+		c.SendMessage()
 		time.Sleep(1 * time.Second)
 	}
-	
-}
 
+}
