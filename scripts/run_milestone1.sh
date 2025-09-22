@@ -36,31 +36,33 @@ echo "1. Starting server..."
 # Give server time to start
 sleep 1
 
-# Start clients in test mode
+# Start clients (note: new implementation sends two messages and exits)
 echo ""
-echo "2. Starting clients (test mode)..."
-"$RUN_SCRIPT" client client1 \
-  -id "$CLIENT1_ID" \
-  -server "$SERVER_ADDR" \
-  -test
+echo "2. Starting clients (they will send messages and exit)..."
 
-"$RUN_SCRIPT" client client2 \
-  -id "$CLIENT2_ID" \
-  -server "$SERVER_ADDR" \
-  -test
+# Run clients directly since they exit quickly
+echo "Running client1..."
+"$BIN_DIR/client" -id "$CLIENT1_ID" -server "$SERVER_ADDR" > "$LOG_DIR/client1.log" 2>&1 &
+sleep 0.1
 
-"$RUN_SCRIPT" client client3 \
-  -id "$CLIENT3_ID" \
-  -server "$SERVER_ADDR" \
-  -test
+echo "Running client2..."
+"$BIN_DIR/client" -id "$CLIENT2_ID" -server "$SERVER_ADDR" > "$LOG_DIR/client2.log" 2>&1 &
+sleep 0.1
+
+echo "Running client3..."
+"$BIN_DIR/client" -id "$CLIENT3_ID" -server "$SERVER_ADDR" > "$LOG_DIR/client3.log" 2>&1 &
+sleep 0.5
+
+echo "Clients have sent their messages (check logs for details)"
 
 # Start LFD
 echo ""
 echo "3. Starting Local Fault Detector..."
 "$RUN_SCRIPT" lfd lfd \
   -target "$LFD_TARGET_ADDR" \
-  -interval-ms "$LFD_INTERVAL_MS" \
-  -id "LFD1"
+  -hb "$LFD_HB_FREQ" \
+  -timeout "$LFD_TIMEOUT" \
+  -id "$LFD_ID"
 
 echo ""
 echo "==========================================="

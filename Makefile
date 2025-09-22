@@ -11,9 +11,9 @@ CLIENT_BIN := $(BIN_DIR)/client
 LFD_BIN    := $(BIN_DIR)/lfd
 
 # Source files
-SERVER_SRC := $(CMD_DIR)/srunner.go
-CLIENT_SRC := $(CMD_DIR)/crunner.go
-LFD_SRC    := $(CMD_DIR)/lrunner.go
+SERVER_SRC := $(CMD_DIR)/server/srunner.go
+CLIENT_SRC := $(CMD_DIR)/client/crunner.go
+LFD_SRC    := $(CMD_DIR)/lfd/lrunner.go
 
 # ===== Phony Targets =====
 .PHONY: all build clean fmt vet test run stop run-milestone1 run-server run-client run-lfd stop-milestone1 help
@@ -111,9 +111,9 @@ help:
 	@echo "  make stop           - Stop a component (NAME=<name>)"
 	@echo "  make run-milestone1 - Run Milestone 1 demo (1 server + 3 test clients + 1 LFD)"
 	@echo "  make stop-milestone1 - Stop Milestone 1 components"
-	@echo "  make run-server     - Run server directly (pass ARGS=\"-addr :9000 -rid S1\")"
+	@echo "  make run-server     - Run server directly (pass ARGS=\"-addr :9000 -rid S1 -init_state 0\")"
 	@echo "  make run-client     - Run client directly (pass ARGS=\"-id 1 -server :9000\")"
-	@echo "  make run-lfd        - Run LFD directly (pass ARGS=\"-target :9000 -interval-ms 1000\")"
+	@echo "  make run-lfd        - Run LFD directly (pass ARGS=\"-target :9000 -hb 1s -timeout 3s -id LFD1\")"
 	@echo "  make test           - Run tests"
 	@echo "  make fmt            - Format Go code"
 	@echo "  make vet            - Run static analysis"
