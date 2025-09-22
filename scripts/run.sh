@@ -9,7 +9,7 @@ set -eu
 #
 # If no arguments are provided for a component, defaults from environment variables will be used:
 # - server: uses SERVER_ADDR (-addr), SERVER_REPLICA_ID (-rid), SERVER_INIT_STATE (-init_state)
-# - client: uses CLIENT_ID (-id), SERVER_ADDR (-server)
+# - client: uses CLIENT_ID (-id), CLIENT_TARGET_ADDR (-server)
 # - lfd: uses LFD_TARGET_ADDR (-target), LFD_HB_FREQ (-hb), LFD_TIMEOUT (-timeout), LFD_ID (-id)
 
 # Check arguments
@@ -76,8 +76,8 @@ if [ -z "$ARGS" ]; then
       if [ -n "${CLIENT_ID:-}" ]; then
         ARGS="-id $CLIENT_ID"
       fi
-      if [ -n "${SERVER_ADDR:-}" ]; then
-        ARGS="$ARGS -server $SERVER_ADDR"
+      if [ -n "${CLIENT_TARGET_ADDR:-}" ]; then
+        ARGS="$ARGS -server $CLIENT_TARGET_ADDR"
       fi
       ;;
     lfd)

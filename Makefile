@@ -93,15 +93,23 @@ run-milestone1: build
 #   make run-client ARGS="-id 5 -server localhost:8080"
 #   make run-lfd ARGS="-target localhost:8080 -hb 1s -timeout 3s -id LFD2"
 #
-# To use environment variables, you can source .env first:
-#   source .env && make run-server
+# Environment variables used by binaries (automatically loaded from .env):
+#   SERVER_ADDR, SERVER_REPLICA_ID, SERVER_INIT_STATE
+#   CLIENT_ID, CLIENT_TARGET_ADDR
+#   LFD_TARGET_ADDR, LFD_HB_FREQ, LFD_TIMEOUT, LFD_ID
+#
+# Environment variables are automatically loaded when no ARGS provided:
+#   make run-server    # uses .env defaults
+#   make run-client    # uses .env defaults
+#   make run-lfd       # uses .env defaults
 run-server: $(SERVER_BIN)
 	@if [ -n "$(ARGS)" ]; then \
 		echo "Running server with args: $(ARGS)"; \
 		$(SERVER_BIN) $(ARGS); \
 	else \
-		echo "Running server with default args (use ARGS=\"...\" to override)"; \
-		$(SERVER_BIN); \
+		echo "Running server with environment variable defaults"; \
+		if [ -f .env ]; then . ./.env; fi; \
+		$(SERVER_BIN) $${SERVER_ADDR:+-addr $$SERVER_ADDR} $${SERVER_REPLICA_ID:+-rid $$SERVER_REPLICA_ID} $${SERVER_INIT_STATE:+-init_state $$SERVER_INIT_STATE}; \
 	fi
 
 run-client: $(CLIENT_BIN)
@@ -109,8 +117,9 @@ run-client: $(CLIENT_BIN)
 		echo "Running client with args: $(ARGS)"; \
 		$(CLIENT_BIN) $(ARGS); \
 	else \
-		echo "Running client with default args (use ARGS=\"...\" to override)"; \
-		$(CLIENT_BIN); \
+		echo "Running client with environment variable defaults"; \
+		if [ -f .env ]; then . ./.env; fi; \
+		$(CLIENT_BIN) $${CLIENT_ID:+-id $$CLIENT_ID} $${CLIENT_TARGET_ADDR:+-server $$CLIENT_TARGET_ADDR}; \
 	fi
 
 run-lfd: $(LFD_BIN)
@@ -118,8 +127,9 @@ run-lfd: $(LFD_BIN)
 		echo "Running lfd with args: $(ARGS)"; \
 		$(LFD_BIN) $(ARGS); \
 	else \
-		echo "Running lfd with default args (use ARGS=\"...\" to override)"; \
-		$(LFD_BIN); \
+		echo "Running lfd with environment variable defaults"; \
+		if [ -f .env ]; then . ./.env; fi; \
+		$(LFD_BIN) $${LFD_TARGET_ADDR:+-target $$LFD_TARGET_ADDR} $${LFD_HB_FREQ:+-hb $$LFD_HB_FREQ} $${LFD_TIMEOUT:+-timeout $$LFD_TIMEOUT} $${LFD_ID:+-id $$LFD_ID}; \
 	fi
 
 # Stop Milestone 1 components
