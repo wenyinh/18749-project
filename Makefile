@@ -86,18 +86,41 @@ run-milestone1: build
 	fi
 	./scripts/run_milestone1.sh
 
-# Run individual components (use environment variables or pass your own args)
+# Run individual components directly (use environment variables or pass your own args)
+# If ARGS is not provided, the binary will use its default flag values
 # Examples:
-#   make run-server ARGS="-addr :8080 -rid S2"
-#   make run-client ARGS="-id 5 -server localhost:8080 -test"
+#   make run-server ARGS="-addr :8080 -rid S2 -init_state 0"
+#   make run-client ARGS="-id 5 -server localhost:8080"
+#   make run-lfd ARGS="-target localhost:8080 -hb 1s -timeout 3s -id LFD2"
+#
+# To use environment variables, you can source .env first:
+#   source .env && make run-server
 run-server: $(SERVER_BIN)
-	$(SERVER_BIN) $(ARGS)
+	@if [ -n "$(ARGS)" ]; then \
+		echo "Running server with args: $(ARGS)"; \
+		$(SERVER_BIN) $(ARGS); \
+	else \
+		echo "Running server with default args (use ARGS=\"...\" to override)"; \
+		$(SERVER_BIN); \
+	fi
 
 run-client: $(CLIENT_BIN)
-	$(CLIENT_BIN) $(ARGS)
+	@if [ -n "$(ARGS)" ]; then \
+		echo "Running client with args: $(ARGS)"; \
+		$(CLIENT_BIN) $(ARGS); \
+	else \
+		echo "Running client with default args (use ARGS=\"...\" to override)"; \
+		$(CLIENT_BIN); \
+	fi
 
 run-lfd: $(LFD_BIN)
-	$(LFD_BIN) $(ARGS)
+	@if [ -n "$(ARGS)" ]; then \
+		echo "Running lfd with args: $(ARGS)"; \
+		$(LFD_BIN) $(ARGS); \
+	else \
+		echo "Running lfd with default args (use ARGS=\"...\" to override)"; \
+		$(LFD_BIN); \
+	fi
 
 # Stop Milestone 1 components
 stop-milestone1:
@@ -111,9 +134,9 @@ help:
 	@echo "  make stop           - Stop a component (NAME=<name>)"
 	@echo "  make run-milestone1 - Run Milestone 1 demo (1 server + 3 test clients + 1 LFD)"
 	@echo "  make stop-milestone1 - Stop Milestone 1 components"
-	@echo "  make run-server     - Run server directly (pass ARGS=\"-addr :9000 -rid S1 -init_state 0\")"
-	@echo "  make run-client     - Run client directly (pass ARGS=\"-id 1 -server :9000\")"
-	@echo "  make run-lfd        - Run LFD directly (pass ARGS=\"-target :9000 -hb 1s -timeout 3s -id LFD1\")"
+	@echo "  make run-server     - Run server directly (optional: ARGS=\"-addr :9000 -rid S1 -init_state 0\")"
+	@echo "  make run-client     - Run client directly (optional: ARGS=\"-id 1 -server :9000\")"
+	@echo "  make run-lfd        - Run LFD directly (optional: ARGS=\"-target :9000 -hb 1s -timeout 3s -id LFD1\")"
 	@echo "  make test           - Run tests"
 	@echo "  make fmt            - Format Go code"
 	@echo "  make vet            - Run static analysis"

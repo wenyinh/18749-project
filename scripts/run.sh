@@ -2,14 +2,19 @@
 set -eu
 
 # General component launcher script
-# Usage: ./run_component.sh <component> <name> [args...]
-# Example: ./run_component.sh server server1 -addr :9000 -rid S1
-#          ./run_component.sh client client1 -id 1 -server :9000 -test
-#          ./run_component.sh lfd lfd1 -target :9000 -interval-ms 1000
+# Usage: ./run.sh <component> [name] [args...]
+# Example: ./run.sh server server1 -addr :9000 -rid S1 -init_state 0
+#          ./run.sh client client1 -id 1 -server 127.0.0.1:9000
+#          ./run.sh lfd lfd1 -target 127.0.0.1:9000 -hb 1s -timeout 3s -id LFD1
+#
+# If no arguments are provided for a component, defaults from environment variables will be used:
+# - server: uses SERVER_ADDR (-addr), SERVER_REPLICA_ID (-rid), SERVER_INIT_STATE (-init_state)
+# - client: uses CLIENT_ID (-id), SERVER_ADDR (-server)
+# - lfd: uses LFD_TARGET_ADDR (-target), LFD_HB_FREQ (-hb), LFD_TIMEOUT (-timeout), LFD_ID (-id)
 
 # Check arguments
-if [ $# -lt 2 ]; then
-  echo "Usage: $0 <component> <name> [args...]"
+if [ $# -lt 1 ]; then
+  echo "Usage: $0 <component> [name] [args...]"
   echo ""
   echo "Components:"
   echo "  server - Run server binary"
@@ -17,15 +22,25 @@ if [ $# -lt 2 ]; then
   echo "  lfd    - Run LFD binary"
   echo ""
   echo "Examples:"
-  echo "  $0 server server1 -addr :9000 -rid S1"
-  echo "  $0 client client1 -id 1 -server :9000 -test"
-  echo "  $0 lfd lfd1 -target :9000 -interval-ms 1000"
+  echo "  $0 server server1 -addr :9000 -rid S1 -init_state 0"
+  echo "  $0 client client1 -id 1 -server 127.0.0.1:9000"
+  echo "  $0 lfd lfd1 -target 127.0.0.1:9000 -hb 1s -timeout 3s -id LFD1"
+  echo ""
+  echo "If no arguments provided, environment variables will be used as defaults"
   exit 1
 fi
 
 COMPONENT="$1"
-NAME="$2"
-shift 2
+shift 1
+
+# Set default name if not provided
+if [ $# -gt 0 ]; then
+  NAME="$1"
+  shift 1
+else
+  NAME="${COMPONENT}1"
+fi
+
 ARGS="$@"
 
 # Get script and project directories
@@ -41,6 +56,47 @@ else
   LOG_DIR="${LOG_DIR:-./logs}"
   PID_DIR="${PID_DIR:-./run}"
   BIN_DIR="${BIN_DIR:-./bin}"
+fi
+
+# If no additional args provided, use environment variable defaults
+if [ -z "$ARGS" ]; then
+  case "$COMPONENT" in
+    server)
+      if [ -n "${SERVER_ADDR:-}" ]; then
+        ARGS="-addr $SERVER_ADDR"
+      fi
+      if [ -n "${SERVER_REPLICA_ID:-}" ]; then
+        ARGS="$ARGS -rid $SERVER_REPLICA_ID"
+      fi
+      if [ -n "${SERVER_INIT_STATE:-}" ]; then
+        ARGS="$ARGS -init_state $SERVER_INIT_STATE"
+      fi
+      ;;
+    client)
+      if [ -n "${CLIENT_ID:-}" ]; then
+        ARGS="-id $CLIENT_ID"
+      fi
+      if [ -n "${SERVER_ADDR:-}" ]; then
+        ARGS="$ARGS -server $SERVER_ADDR"
+      fi
+      ;;
+    lfd)
+      if [ -n "${LFD_TARGET_ADDR:-}" ]; then
+        ARGS="-target $LFD_TARGET_ADDR"
+      fi
+      if [ -n "${LFD_HB_FREQ:-}" ]; then
+        ARGS="$ARGS -hb $LFD_HB_FREQ"
+      fi
+      if [ -n "${LFD_TIMEOUT:-}" ]; then
+        ARGS="$ARGS -timeout $LFD_TIMEOUT"
+      fi
+      if [ -n "${LFD_ID:-}" ]; then
+        ARGS="$ARGS -id $LFD_ID"
+      fi
+      ;;
+  esac
+  # Remove leading space if exists
+  ARGS=$(echo "$ARGS" | sed 's/^ *//')
 fi
 
 # Validate component type
@@ -84,7 +140,11 @@ echo "==========================================="
 echo "Starting $COMPONENT: $NAME"
 echo "==========================================="
 echo "Binary: $BINARY"
-echo "Arguments: $ARGS"
+if [ -n "$ARGS" ]; then
+  echo "Arguments: $ARGS"
+else
+  echo "Arguments: (none - using defaults if available)"
+fi
 echo "Log file: $LOG_DIR/$NAME.log"
 echo "PID file: $PID_DIR/$NAME.pid"
 echo ""
