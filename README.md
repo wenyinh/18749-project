@@ -27,7 +27,7 @@ make build
 ### Running Milestone 1 Demo
 
 ```bash
-# Start all components (1 server + 3 test clients + 1 LFD)
+# Start all components (1 server + 3 long-running clients + 1 LFD)
 make run-milestone1
 
 # View logs in another terminal
@@ -48,11 +48,8 @@ Start components individually with custom configurations:
 # Start server
 make run COMPONENT=server NAME=s1 ARGS="-addr :9000 -rid S1 -init_state 0"
 
-# Start client (normal mode)
+# Start long-running client
 make run COMPONENT=client NAME=c1 ARGS="-id 1 -server :9000"
-
-# Start client (test mode - sends periodic requests)
-make run COMPONENT=client NAME=c1 ARGS="-id 1 -server :9000 -test"
 
 # Start LFD
 make run COMPONENT=lfd NAME=lfd1 ARGS="-target :9000 -interval-ms 1000 -id LFD1"
@@ -64,14 +61,15 @@ make stop NAME=s1
 ### Direct Binary Execution
 
 ```bash
-# Run server directly
+# Run components directly via Make
+make run-server ARGS="-addr :9000 -rid S1 -init_state 0"
+make run-client ARGS="-id 1 -server :9000"
+make run-lfd ARGS="-target :9000 -hb 1s -timeout 3s -id LFD1"
+
+# Or run binaries directly
 ./bin/server -addr :9000 -rid S1 -init_state 0
-
-# Run client directly
-./bin/client -id 1 -server :9000 -test
-
-# Run LFD directly
-./bin/lfd -target :9000 -interval-ms 1000 -id LFD1
+./bin/client -id 1 -server :9000
+./bin/lfd -target :9000 -hb 1s -timeout 3s -id LFD1
 ```
 
 ## Component Parameters
@@ -84,11 +82,13 @@ make stop NAME=s1
 ### Client
 - `-id`: Client identifier (default: "1")
 - `-server`: Server address (default: "127.0.0.1:9000")
-- `-test`: Enable test mode for periodic requests (default: false)
+
+**Note**: Clients now run continuously as long-running processes that maintain connections to the server.
 
 ### LFD (Local Fault Detector)
 - `-target`: Server address to monitor (default: "127.0.0.1:9000")
-- `-interval-ms`: Heartbeat interval in milliseconds (default: 1000)
+- `-hb`: Heartbeat interval (e.g., "1s", "1000ms") (default: "1s")
+- `-timeout`: Timeout duration (e.g., "3s") (default: "3s")
 - `-id`: LFD identifier (default: "LFD1")
 
 ## Project Structure
@@ -96,9 +96,12 @@ make stop NAME=s1
 ```
 .
 ├── cmd/                    # Main entry points
-│   ├── srunner.go         # Server launcher
-│   ├── crunner.go         # Client launcher
-│   └── lrunner.go         # LFD launcher
+│   ├── server/
+│   │   └── srunner.go     # Server launcher
+│   ├── client/
+│   │   └── crunner.go     # Client launcher
+│   └── lfd/
+│       └── lrunner.go     # LFD launcher
 ├── server/                # Server implementation
 │   ├── server_api.go      # Server interface
 │   └── server_impl.go     # Server logic
@@ -143,7 +146,19 @@ make vet            # Run static analysis
 ### Available Make Targets
 
 ```bash
-make help           # Show all available targets
+make build          # Build all binaries
+make run            # Run a component (COMPONENT=server|client|lfd NAME=<name> ARGS="...")
+make stop           # Stop a component (NAME=<name>)
+make run-milestone1 # Run Milestone 1 demo (1 server + 3 long-running clients + 1 LFD)
+make stop-milestone1 # Stop Milestone 1 components
+make run-server     # Run server directly (pass ARGS="-addr :9000 -rid S1 -init_state 0")
+make run-client     # Run client directly (pass ARGS="-id 1 -server :9000")
+make run-lfd        # Run LFD directly (pass ARGS="-target :9000 -hb 1s -timeout 3s -id LFD1")
+make test           # Run tests
+make fmt            # Format Go code
+make vet            # Run static analysis
+make clean          # Remove build artifacts and logs
+make help           # Show detailed help message
 ```
 
 ## Configuration
@@ -163,7 +178,9 @@ CLIENT3_ID="3"
 
 # LFD configuration
 LFD_TARGET_ADDR="127.0.0.1:9000"
-LFD_INTERVAL_MS="1000"
+LFD_HB_FREQ="1s"
+LFD_TIMEOUT="3s"
+LFD_ID="LFD1"
 
 # Directory configuration
 LOG_DIR="./logs"
