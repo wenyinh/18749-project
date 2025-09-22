@@ -28,7 +28,7 @@ func MustListen(addr string) net.Listener {
 	return ln
 }
 
-func MustDial(addr string) net.Conn {
+func MustDial(addr string) (net.Conn) {
 	c, err := net.Dial("tcp", addr)
 	if err != nil {
 		panic(fmt.Errorf("dial %s failed: %w", addr, err))
