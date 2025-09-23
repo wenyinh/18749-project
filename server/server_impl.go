@@ -44,7 +44,7 @@ func (s *server) handleConnection(conn net.Conn) {
 				log.Printf("[SERVER][%s] heartbeat, sent pong to LFD", s.ReplicaId)
 			}
 		} else if strings.HasPrefix(line, Req) {
-			// Client sent: REQ <client_id> <req_id> <Message>
+			// Client sent: REQ <client_id> <Message>
 			parts := strings.Split(line, " ")
 			if len(parts) != 3 {
 				_ = utils.WriteLine(conn, "ERROR: invalid request format")
