@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/json"
 	"github.com/wenyinh/18749-project/utils"
 	"log"
 	"net"
@@ -9,6 +10,20 @@ import (
 	"sync"
 	"time"
 )
+
+type RequestMessage struct {
+	Type     string `json:"type"`
+	ClientID string `json:"client_id"`
+	Message  string `json:"message"`
+}
+
+type ResponseMessage struct {
+	Type        string `json:"type"`
+	ServerID    string `json:"server_id"`
+	ClientID    string `json:"client_id"`
+	ServerState int    `json:"server_state"`
+	Message     string `json:"message"`
+}
 
 type client struct {
 	clientID           int
@@ -96,10 +111,21 @@ func (c *client) SendMessage(message string) {
 		}
 	}
 
-	// Construct REQ template: REQ <client_id> <message>
-	fullMsg := "REQ C" + strconv.Itoa(c.clientID) + " " + message
-	log.Printf("[C%d] Sending message: %s\n", c.clientID, fullMsg)
-	err := utils.WriteLine(c.conn, fullMsg)
+	// Construct JSON request message
+	reqMsg := RequestMessage{
+		Type:     "REQ",
+		ClientID: "C" + strconv.Itoa(c.clientID),
+		Message:  message,
+	}
+
+	jsonData, err := json.Marshal(reqMsg)
+	if err != nil {
+		log.Printf("[C%d] Error marshaling JSON: %v\n", c.clientID, err)
+		return
+	}
+
+	log.Printf("[C%d] Sending JSON message: %s\n", c.clientID, string(jsonData))
+	err = utils.WriteLine(c.conn, string(jsonData))
 	if err != nil {
 		log.Printf("[C%d] Error sending message: %v\n", c.clientID, err)
 		c.handleConnectionError()
@@ -110,7 +136,7 @@ func (c *client) SendMessage(message string) {
 		return
 	}
 
-	// Receive and print reply
+	// Receive and parse JSON reply
 	buffer := make([]byte, 1024)
 	n, err := c.conn.Read(buffer)
 	if err != nil {
@@ -123,7 +149,14 @@ func (c *client) SendMessage(message string) {
 		return
 	}
 	reply := string(buffer[:n])
-	log.Printf("[C%d] Received reply: %s\n", c.clientID, reply)
+	log.Printf("[C%d] Received JSON reply: %s\n", c.clientID, reply)
+
+	// Try to parse as JSON response
+	var respMsg ResponseMessage
+	if err := json.Unmarshal(buffer[:n], &respMsg); err == nil {
+		log.Printf("[C%d] Parsed response - Server: %s, State: %d, Message: %s\n",
+			c.clientID, respMsg.ServerID, respMsg.ServerState, respMsg.Message)
+	}
 }
 
 func (c *client) handleConnectionError() {
