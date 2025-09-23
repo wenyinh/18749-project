@@ -61,7 +61,10 @@ func (s *server) handleConnection(conn net.Conn) {
 			_ = utils.WriteLine(conn, Resp+" "+s.ReplicaId+" "+clientId+" "+requestId+" "+strconv.Itoa(s.ServerState)+" "+msg)
 			log.Printf("[SERVER][%s] reply to client, clientId: %s, requestId: %s, server state: %d, message: %s", s.ReplicaId, clientId, requestId, s.ServerState, msg)
 		} else {
-			_ = utils.WriteLine(conn, "ERROR: unknown request")
+			// Echo back the exact message received
+			log.Printf("[SERVER][%s] received message: %s", s.ReplicaId, line)
+			_ = utils.WriteLine(conn, line)
+			log.Printf("[SERVER][%s] echoed back message: %s", s.ReplicaId, line)
 		}
 	}
 }

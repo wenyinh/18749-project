@@ -84,7 +84,7 @@ func (c *client) reconnect() error {
 	return c.connectWithRetry()
 }
 
-func (c *client) SendMessage() {
+func (c *client) SendMessage(message string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -96,11 +96,8 @@ func (c *client) SendMessage() {
 		}
 	}
 
-	c.reqID++
-	fullMsg := "REQ C" + strconv.Itoa(c.clientID) + " " + strconv.Itoa(c.reqID)
-
-	log.Printf("[C%d] Sending request: %s\n", c.clientID, fullMsg)
-	err := utils.WriteLine(c.conn, fullMsg)
+	log.Printf("[C%d] Sending message: %s\n", c.clientID, message)
+	err := utils.WriteLine(c.conn, message)
 	if err != nil {
 		log.Printf("[C%d] Error sending message: %v\n", c.clientID, err)
 		c.handleConnectionError()

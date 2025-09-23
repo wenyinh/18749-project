@@ -2,6 +2,6 @@ package client
 
 type Client interface {
 	Connect() error
-	SendMessage()
+	SendMessage(message string)
 	Close()
 }
