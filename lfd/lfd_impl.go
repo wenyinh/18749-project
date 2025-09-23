@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"time"
 
 	"github.com/wenyinh/18749-project/utils"
@@ -38,9 +39,12 @@ func (l *lfd) Run() error {
 	log.Printf("[LFD][%s] starting; server=%s freq=%s timeout=%s",
 		l.replicaID, l.serverAddr, l.hbFreq, l.timeout)
 
-	// Ensure connection first (MustDial will panic on failure)
+	// Try initial connection
 	if l.conn == nil {
-		_ = l.connect()
+		if err := l.connect(); err != nil {
+			fmt.Printf("SERVER %s DOWN\n", l.serverAddr)
+			os.Exit(0)
+		}
 	}
 
 	// Optional: send one immediate heartbeat for quicker feedback
@@ -60,9 +64,9 @@ func (l *lfd) Run() error {
 func (l *lfd) sendOneHeartbeat() {
 	if l.conn == nil {
 		if err := l.connect(); err != nil {
-			log.Printf("[LFD][%s] connect failed: %v; retrying in 1s", l.replicaID, err)
-			time.Sleep(1 * time.Second)
-			return
+			log.Printf("[LFD][%s] connect failed: %v; server appears to be down", l.replicaID, err)
+			fmt.Printf("SERVER %s DOWN\n", l.serverAddr)
+			os.Exit(0)
 		}
 	}
 
@@ -74,8 +78,8 @@ func (l *lfd) sendOneHeartbeat() {
 	if err := utils.WriteLine(l.conn, hb); err != nil {
 		log.Printf("[%s] [heartbeat_count=%d] HEARTBEAT SEND FAILED to %s: %v  <-- DETECTED CRASH",
 			l.lfdTag(), l.heartbeatCnt, l.serverAddr, err)
-		l.resetConn()
-		return
+		fmt.Printf("SERVER %s DOWN\n", l.serverAddr)
+		os.Exit(0)
 	}
 	log.Printf("[%s] [heartbeat_count=%d] LFD->S send heartbeat: '%s'",
 		l.lfdTag(), l.heartbeatCnt, hb)
@@ -86,8 +90,8 @@ func (l *lfd) sendOneHeartbeat() {
 	if err != nil {
 		log.Printf("[%s] [heartbeat_count=%d] HEARTBEAT RECV FAILED from %s: %v  <-- DETECTED CRASH",
 			l.lfdTag(), l.heartbeatCnt, l.serverAddr, err)
-		l.resetConn()
-		return
+		fmt.Printf("SERVER %s DOWN\n", l.serverAddr)
+		os.Exit(0)
 	}
 
 	if line == pong {
@@ -96,13 +100,18 @@ func (l *lfd) sendOneHeartbeat() {
 	} else {
 		log.Printf("[%s] [heartbeat_count=%d] UNEXPECTED REPLY '%s' (expected PONG)  <-- DETECTED CRASH",
 			l.lfdTag(), l.heartbeatCnt, line)
-		l.resetConn()
+		fmt.Printf("SERVER %s DOWN\n", l.serverAddr)
+		os.Exit(0)
 	}
 }
 
 func (l *lfd) connect() error {
 	log.Printf("[LFD][%s] connecting to %s ...", l.replicaID, l.serverAddr)
-	conn := utils.MustDial(l.serverAddr) // panics on failure
+	conn, err := net.Dial("tcp", l.serverAddr)
+	if err != nil {
+		log.Printf("[LFD][%s] connection to %s failed: %v", l.replicaID, l.serverAddr, err)
+		return err
+	}
 	l.conn = conn
 	l.reader = bufio.NewReader(l.conn)
 	log.Printf("[LFD][%s] connected to %s", l.replicaID, l.serverAddr)
