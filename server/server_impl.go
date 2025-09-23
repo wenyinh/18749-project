@@ -58,7 +58,7 @@ func (s *server) handleConnection(conn net.Conn) {
 			log.Printf("[SERVER][%s] server state after: %d", s.ReplicaId, s.ServerState)
 			// RESP <serverId> <clientId> <ServerState>
 			_ = utils.WriteLine(conn, Resp+" "+s.ReplicaId+" "+clientId+" "+" "+strconv.Itoa(s.ServerState)+" "+msg)
-			log.Printf("[SERVER][%s] reply to client, clientId: %s, requestId: %s, server state: %d, message: %s", s.ReplicaId, clientId, s.ServerState, msg)
+			log.Printf("[SERVER][%s] reply to client, clientId: %s, server state: %d, message: %s", s.ReplicaId, clientId, s.ServerState, msg)
 		} else {
 			_ = utils.WriteLine(conn, "ERROR: unknown request")
 		}
