@@ -16,7 +16,7 @@ CLIENT_SRC := $(CMD_DIR)/client/crunner.go
 LFD_SRC    := $(CMD_DIR)/lfd/lrunner.go
 
 # ===== Phony Targets =====
-.PHONY: all build clean fmt vet test run stop run-milestone1 run-server run-client run-lfd stop-milestone1 help
+.PHONY: all build clean fmt vet test run-server run-client run-lfd help
 
 # Default target
 all: build
@@ -58,33 +58,7 @@ vet:
 test:
 	$(GO) test -race ./...
 
-# Run a single component with custom name and args
-# Usage: make run COMPONENT=server NAME=s1 ARGS="-addr :9000 -rid S1"
-run: build
-	@if [ -z "$(COMPONENT)" ] || [ -z "$(NAME)" ]; then \
-		echo "Usage: make run COMPONENT=<type> NAME=<name> ARGS=\"<args>\""; \
-		echo "Example: make run COMPONENT=server NAME=s1 ARGS=\"-addr :9000 -rid S1\""; \
-		exit 1; \
-	fi
-	./scripts/run.sh $(COMPONENT) $(NAME) $(ARGS)
 
-# Stop a single component by name
-# Usage: make stop NAME=s1
-stop:
-	@if [ -z "$(NAME)" ]; then \
-		echo "Usage: make stop NAME=<name>"; \
-		echo "Example: make stop NAME=s1"; \
-		exit 1; \
-	fi
-	./scripts/stop.sh $(NAME)
-
-# Run Milestone 1 demo (1 server + 3 test clients + 1 LFD)
-run-milestone1: build
-	@if [ ! -f .env ]; then \
-		echo "Error: .env not found. Copy .env.example to .env and edit it."; \
-		exit 1; \
-	fi
-	./scripts/run_milestone1.sh
 
 # Run individual components directly (use environment variables or pass your own args)
 # If ARGS is not provided, the binary will use its default flag values
@@ -132,18 +106,11 @@ run-lfd: $(LFD_BIN)
 		$(LFD_BIN) $${LFD_TARGET_ADDR:+-target $$LFD_TARGET_ADDR} $${LFD_HB_FREQ:+-hb $$LFD_HB_FREQ} $${LFD_TIMEOUT:+-timeout $$LFD_TIMEOUT} $${LFD_ID:+-id $$LFD_ID}; \
 	fi
 
-# Stop Milestone 1 components
-stop-milestone1:
-	./scripts/stop_milestone1.sh
 
 # Display help
 help:
 	@echo "Available targets:"
 	@echo "  make build          - Build all binaries"
-	@echo "  make run            - Run a component (COMPONENT=server|client|lfd NAME=<name> ARGS=\"...\")"
-	@echo "  make stop           - Stop a component (NAME=<name>)"
-	@echo "  make run-milestone1 - Run Milestone 1 demo (1 server + 3 test clients + 1 LFD)"
-	@echo "  make stop-milestone1 - Stop Milestone 1 components"
 	@echo "  make run-server     - Run server directly (optional: ARGS=\"-addr :9000 -rid S1 -init_state 0\")"
 	@echo "  make run-client     - Run client directly (optional: ARGS=\"-id 1 -server :9000\")"
 	@echo "  make run-lfd        - Run LFD directly (optional: ARGS=\"-target :9000 -hb 1s -timeout 3s -id LFD1\")"
