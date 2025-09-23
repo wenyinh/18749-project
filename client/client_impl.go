@@ -4,30 +4,33 @@ import (
 	"github.com/wenyinh/18749-project/utils"
 	"log"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"time"
 )
 
 type client struct {
-	clientID       int
-	serverAddr     string
-	conn           net.Conn
-	reqID          int
-	mu             sync.Mutex
-	maxRetries     int
-	baseDelay      time.Duration
-	maxDelay       time.Duration
-	currentRetries int
+	clientID           int
+	serverAddr         string
+	conn               net.Conn
+	reqID              int
+	mu                 sync.Mutex
+	maxRetries         int
+	baseDelay          time.Duration
+	maxDelay           time.Duration
+	consecutiveFailures int
+	maxConsecutiveFailures int
 }
 
 func NewClient(clientID int, serverAddr string) Client {
 	return &client{
-		clientID:   clientID,
-		serverAddr: serverAddr,
-		maxRetries: 5,
-		baseDelay:  time.Second,
-		maxDelay:   time.Minute,
+		clientID:               clientID,
+		serverAddr:             serverAddr,
+		maxRetries:             5,
+		baseDelay:              time.Second,
+		maxDelay:               time.Minute,
+		maxConsecutiveFailures: 3,
 	}
 }
 
@@ -42,13 +45,14 @@ func (c *client) connectWithRetry() error {
 		conn, err := net.Dial("tcp", c.serverAddr)
 		if err == nil {
 			c.conn = conn
-			c.currentRetries = 0
+			c.consecutiveFailures = 0
 			log.Printf("[C%d] Connected to server S1\n", c.clientID)
 			return nil
 		}
 
 		if attempt == c.maxRetries {
 			log.Printf("[C%d] Failed to connect after %d attempts: %v\n", c.clientID, c.maxRetries+1, err)
+			c.consecutiveFailures++
 			return err
 		}
 
@@ -87,8 +91,8 @@ func (c *client) SendMessage() {
 	if c.conn == nil {
 		log.Printf("[C%d] Not connected to server, attempting to connect\n", c.clientID)
 		if err := c.connectWithRetry(); err != nil {
-			log.Printf("[C%d] Failed to establish connection: %v\n", c.clientID, err)
-			return
+			log.Printf("[C%d] Failed to establish connection after all retries, exiting: %v\n", c.clientID, err)
+			os.Exit(1)
 		}
 	}
 
@@ -100,6 +104,10 @@ func (c *client) SendMessage() {
 	if err != nil {
 		log.Printf("[C%d] Error sending message: %v\n", c.clientID, err)
 		c.handleConnectionError()
+		if err := c.connectWithRetry(); err != nil {
+			log.Printf("[C%d] Failed to reconnect after all retries, exiting: %v\n", c.clientID, err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -109,6 +117,10 @@ func (c *client) SendMessage() {
 	if err != nil {
 		log.Printf("[C%d] Error receiving reply: %v\n", c.clientID, err)
 		c.handleConnectionError()
+		if err := c.connectWithRetry(); err != nil {
+			log.Printf("[C%d] Failed to reconnect after all retries, exiting: %v\n", c.clientID, err)
+			os.Exit(1)
+		}
 		return
 	}
 	reply := string(buffer[:n])
