@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -95,8 +96,10 @@ func (c *client) SendMessage(message string) {
 		}
 	}
 
-	log.Printf("[C%d] Sending message: %s\n", c.clientID, message)
-	err := utils.WriteLine(c.conn, message)
+	// Construct REQ template: REQ <client_id> <message>
+	fullMsg := "REQ C" + strconv.Itoa(c.clientID) + " " + message
+	log.Printf("[C%d] Sending message: %s\n", c.clientID, fullMsg)
+	err := utils.WriteLine(c.conn, fullMsg)
 	if err != nil {
 		log.Printf("[C%d] Error sending message: %v\n", c.clientID, err)
 		c.handleConnectionError()
