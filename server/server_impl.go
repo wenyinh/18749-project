@@ -43,23 +43,6 @@ func (s *server) handleConnection(conn net.Conn) {
 			if err == nil {
 				log.Printf("[SERVER][%s] heartbeat, sent pong to LFD", s.ReplicaId)
 			}
-		} else if strings.HasPrefix(line, Req) {
-			// Client sent: REQ <client_id> <req_id> <Message>
-			parts := strings.Split(line, " ")
-			if len(parts) != 4 {
-				_ = utils.WriteLine(conn, "ERROR: invalid request format")
-				continue
-			}
-			clientId := parts[1]
-			requestId := parts[2]
-			msg := parts[3]
-			log.Printf("[SERVER][%s] received request from client, clientId: %s, request ID: %s, Message: %s", s.ReplicaId, clientId, requestId, msg)
-			log.Printf("[SERVER][%s] server state before: %d", s.ReplicaId, s.ServerState)
-			s.ServerState++
-			log.Printf("[SERVER][%s] server state after: %d", s.ReplicaId, s.ServerState)
-			// RESP <serverId> <clientId> <reqId> <ServerState>
-			_ = utils.WriteLine(conn, Resp+" "+s.ReplicaId+" "+clientId+" "+requestId+" "+strconv.Itoa(s.ServerState)+" "+msg)
-			log.Printf("[SERVER][%s] reply to client, clientId: %s, requestId: %s, server state: %d, message: %s", s.ReplicaId, clientId, requestId, s.ServerState, msg)
 		} else {
 			// Echo back the exact message received
 			log.Printf("[SERVER][%s] received message: %s", s.ReplicaId, line)
