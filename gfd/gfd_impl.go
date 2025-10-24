@@ -13,8 +13,10 @@ import (
 
 type gfd struct {
 	addr         string
-	membership   []string
+	membership   []string          // List of server IDs
 	memberCount  int
+	serverToLFD  map[string]string // Map of server ID -> LFD ID
+	lfdConns     map[string]net.Conn // Map of LFD ID -> connection
 	mu           sync.Mutex
 }
 
@@ -23,6 +25,8 @@ func NewGFD(addr string) GFD {
 		addr:        addr,
 		membership:  make([]string, 0),
 		memberCount: 0,
+		serverToLFD: make(map[string]string),
+		lfdConns:    make(map[string]net.Conn),
 	}
 }
 
@@ -45,12 +49,17 @@ func (g *gfd) Run() error {
 }
 
 func (g *gfd) handleConnection(conn net.Conn) {
+	var lfdID string
 	defer func() {
+		// When LFD disconnects, log it but DON'T remove server from membership
+		if lfdID != "" {
+			g.handleLFDDisconnection(lfdID)
+		}
 		_ = conn.Close()
 	}()
 
 	r := bufio.NewReader(conn)
-	log.Printf("[GFD] connected to %s", conn.RemoteAddr())
+	log.Printf("[GFD] LFD connected from %s", conn.RemoteAddr())
 
 	for {
 		line, err := utils.ReadLine(r)
@@ -59,53 +68,85 @@ func (g *gfd) handleConnection(conn net.Conn) {
 		}
 
 		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			log.Printf("[GFD] invalid message: %s", line)
+		if len(parts) < 3 {
+			log.Printf("[GFD] invalid message (expected 'CMD SERVER_ID LFD_ID'): %s", line)
 			continue
 		}
 
 		command := strings.ToUpper(parts[0])
-		replicaID := parts[1]
+		serverID := parts[1]
+		lfdID = parts[2]
+
+		// Store connection for this LFD
+		g.mu.Lock()
+		g.lfdConns[lfdID] = conn
+		g.mu.Unlock()
 
 		switch command {
 		case "ADD":
-			g.addReplica(replicaID)
+			g.addReplica(serverID, lfdID)
 		case "DELETE":
-			g.deleteReplica(replicaID)
+			g.deleteReplica(serverID, lfdID)
 		default:
 			log.Printf("[GFD] unknown command: %s", command)
 		}
 	}
 }
 
-func (g *gfd) addReplica(replicaID string) {
+func (g *gfd) handleLFDDisconnection(lfdID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	// Check if already exists
+	// Find which server this LFD was monitoring
+	var serverID string
+	for sID, lID := range g.serverToLFD {
+		if lID == lfdID {
+			serverID = sID
+			break
+		}
+	}
+
+	// Remove connection
+	delete(g.lfdConns, lfdID)
+
+	if serverID != "" {
+		log.Printf("[GFD] LFD %s disconnected (was monitoring server %s), but NOT removing server from membership", lfdID, serverID)
+	} else {
+		log.Printf("[GFD] LFD %s disconnected", lfdID)
+	}
+}
+
+func (g *gfd) addReplica(serverID string, lfdID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Check if server already exists in membership
 	for _, member := range g.membership {
-		if member == replicaID {
-			log.Printf("[GFD] replica %s already in membership", replicaID)
+		if member == serverID {
+			log.Printf("[GFD] server %s already in membership (monitored by LFD %s)", serverID, lfdID)
+			g.serverToLFD[serverID] = lfdID
 			return
 		}
 	}
 
-	g.membership = append(g.membership, replicaID)
+	// Add server to membership
+	g.membership = append(g.membership, serverID)
 	g.memberCount = len(g.membership)
+	g.serverToLFD[serverID] = lfdID
 
-	log.Printf("[GFD] added replica %s", replicaID)
+	log.Printf("[GFD] added server %s to membership (monitored by LFD %s)", serverID, lfdID)
 	g.printMembershipLocked()
 }
 
-func (g *gfd) deleteReplica(replicaID string) {
+func (g *gfd) deleteReplica(serverID string, lfdID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	// Find and remove
+	// Find and remove server from membership
 	found := false
 	newMembership := make([]string, 0, len(g.membership))
 	for _, member := range g.membership {
-		if member != replicaID {
+		if member != serverID {
 			newMembership = append(newMembership, member)
 		} else {
 			found = true
@@ -113,14 +154,15 @@ func (g *gfd) deleteReplica(replicaID string) {
 	}
 
 	if !found {
-		log.Printf("[GFD] replica %s not found in membership", replicaID)
+		log.Printf("[GFD] server %s not found in membership (DELETE request from LFD %s)", serverID, lfdID)
 		return
 	}
 
 	g.membership = newMembership
 	g.memberCount = len(g.membership)
+	delete(g.serverToLFD, serverID)
 
-	log.Printf("[GFD] deleted replica %s", replicaID)
+	log.Printf("[GFD] deleted server %s from membership (reported by LFD %s)", serverID, lfdID)
 	g.printMembershipLocked()
 }
 

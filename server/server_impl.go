@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"log"
 	"net"
+	"strings"
 
 	"github.com/wenyinh/18749-project/utils"
 )
 
 const (
-	Ping = "PING"
-	Pong = "PONG"
-	Req  = "REQ"
-	Resp = "RESP"
+	Ping     = "PING"
+	Pong     = "PONG"
+	Req      = "REQ"
+	Resp     = "RESP"
+	Register = "REGISTER"
+	Ack      = "ACK"
+	Nack     = "NACK"
 )
 
 type RequestMessage struct {
@@ -48,11 +52,43 @@ func (s *server) handleConnection(conn net.Conn) {
 	}()
 	r := bufio.NewReader(conn)
 	log.Printf("[SERVER][%s] connected to %s", s.ReplicaId, conn.RemoteAddr())
+
+	isLFDConnection := false
+
 	for {
 		line, err := utils.ReadLine(r)
 		if err != nil {
+			if isLFDConnection {
+				log.Printf("[SERVER][%s] LFD disconnected from %s", s.ReplicaId, conn.RemoteAddr())
+			}
 			return
 		}
+
+		// Check if this is a REGISTER message from LFD
+		if len(line) >= len(Register) && line[:len(Register)] == Register {
+			parts := strings.Fields(line)
+			if len(parts) == 2 {
+				requestedServerID := parts[1]
+				if requestedServerID == s.ReplicaId {
+					// Server ID matches, acknowledge
+					err := utils.WriteLine(conn, Ack)
+					if err == nil {
+						isLFDConnection = true
+						log.Printf("[SERVER][%s] LFD registered successfully to monitor this server", s.ReplicaId)
+					}
+				} else {
+					// Server ID mismatch, reject
+					err := utils.WriteLine(conn, Nack)
+					log.Printf("[SERVER][%s] rejected LFD registration: expected %s but got %s",
+						s.ReplicaId, s.ReplicaId, requestedServerID)
+					if err == nil {
+						return
+					}
+				}
+			}
+			continue
+		}
+
 		if line == Ping {
 			err := utils.WriteLine(conn, Pong)
 			if err == nil {

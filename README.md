@@ -145,12 +145,30 @@ Milestone 2 implements active replication with:
 
 ### Milestone 2 Features
 
-✅ **GFD**: Maintains membership list `[S1, S2, S3]`
+✅ **GFD**: Maintains membership list `[S1, S2, S3]` based on server IDs
+✅ **LFD-Server Registration**: LFD must declare which server it monitors; server validates the name match
+✅ **Server-Centric Membership**: GFD tracks servers (not LFDs); membership shows server names
+✅ **LFD Disconnection Handling**: GFD logs LFD disconnections but doesn't remove servers from membership
 ✅ **LFD Exponential Backoff**: Reconnection delays: 1s → 2s → 4s → 8s → 16s → 30s
 ✅ **Active Replication**: Clients send to all 3 replicas
 ✅ **Duplicate Detection**: First reply accepted, others discarded
 ✅ **Request Queueing**: Queues requests when disconnected, flushes on reconnect
 ✅ **Fault Tolerance**: Tolerates 1-2 server failures
+
+#### Important Architecture Notes
+
+**LFD Registration Protocol:**
+- When LFD starts, it declares which server (by ID) it intends to monitor
+- Server validates that the declared server ID matches its own `ReplicaId`
+- Connection is rejected if names don't match
+- This ensures proper server-LFD pairing
+
+**GFD Membership Management:**
+- GFD membership list displays **server IDs** (e.g., S1, S2, S3), **not LFD IDs**
+- LFDs report their monitored server's ID to GFD (not their own ID)
+- When LFD sends `ADD S1 LFD1`, GFD adds `S1` to membership (monitored by `LFD1`)
+- If LFD disconnects (network issue, crash), GFD logs: "LFD X disconnected (was monitoring server Y), but NOT removing server from membership"
+- Servers are only removed when LFD explicitly sends `DELETE` (after detecting server failure)
 
 ### Testing Fault Tolerance
 
@@ -173,7 +191,7 @@ If you prefer to run components in the background:
 mkdir -p logs run
 
 # GFD
-./bin/gfd -addr :8000 > logs/gfd.log 2>&1 &
+./bin/gfd -addr 0.0.0.0:8000 > logs/gfd.log 2>&1 &
 echo $! > run/gfd.pid
 
 # Servers
@@ -197,7 +215,7 @@ echo $! > run/lfd2.pid
 echo $! > run/lfd3.pid
 
 # Clients
-./bin/client -id C1 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -interval 2s -auto > logs/client1.log 2>&1 &
+./bin/client -id C1 -servers "S1=172.26.127.255:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -interval 2s -auto > logs/client1.log 2>&1 &
 echo $! > run/client1.pid
 
 ./bin/client -id C2 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -interval 2s -auto > logs/client2.log 2>&1 &
