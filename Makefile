@@ -9,20 +9,22 @@ LDFLAGS   := -X 'main.version=$(VERSION)'
 SERVER_BIN := $(BIN_DIR)/server
 CLIENT_BIN := $(BIN_DIR)/client
 LFD_BIN    := $(BIN_DIR)/lfd
+GFD_BIN    := $(BIN_DIR)/gfd
 
 # Source files
 SERVER_SRC := $(CMD_DIR)/server/srunner.go
 CLIENT_SRC := $(CMD_DIR)/client/crunner.go
 LFD_SRC    := $(CMD_DIR)/lfd/lrunner.go
+GFD_SRC    := $(CMD_DIR)/gfd/grunner.go
 
 # ===== Phony Targets =====
-.PHONY: all build clean fmt vet test run-server run-client run-lfd help
+.PHONY: all build clean fmt vet test run-server run-client run-lfd run-gfd run-milestone2 stop-milestone2 help
 
 # Default target
 all: build
 
 # Build all binaries
-build: $(SERVER_BIN) $(CLIENT_BIN) $(LFD_BIN)
+build: $(SERVER_BIN) $(CLIENT_BIN) $(LFD_BIN) $(GFD_BIN)
 	@echo "Build complete. Binaries in $(BIN_DIR)/"
 
 # Build individual binaries
@@ -40,6 +42,11 @@ $(LFD_BIN): $(LFD_SRC)
 	@mkdir -p $(BIN_DIR)
 	@echo "Building lfd..."
 	$(GO) build -ldflags="$(LDFLAGS)" -o $(LFD_BIN) $(LFD_SRC)
+
+$(GFD_BIN): $(GFD_SRC)
+	@mkdir -p $(BIN_DIR)
+	@echo "Building gfd..."
+	$(GO) build -ldflags="$(LDFLAGS)" -o $(GFD_BIN) $(GFD_SRC)
 
 # Clean build artifacts and logs
 clean:
@@ -106,14 +113,37 @@ run-lfd: $(LFD_BIN)
 		$(LFD_BIN) $${LFD_TARGET_ADDR:+-target $$LFD_TARGET_ADDR} $${LFD_HB_FREQ:+-hb $$LFD_HB_FREQ} $${LFD_TIMEOUT:+-timeout $$LFD_TIMEOUT} $${LFD_ID:+-id $$LFD_ID}; \
 	fi
 
+run-gfd: $(GFD_BIN)
+	@if [ -n "$(ARGS)" ]; then \
+		echo "Running gfd with args: $(ARGS)"; \
+		$(GFD_BIN) $(ARGS); \
+	else \
+		echo "Running gfd with environment variable defaults"; \
+		if [ -f .env ]; then . ./.env; fi; \
+		$(GFD_BIN) $${GFD_ADDR:+-addr $$GFD_ADDR}; \
+	fi
+
+# Run Milestone 2 demo
+run-milestone2: build
+	@echo "Starting Milestone 2 demo..."
+	@./scripts/run_milestone2.sh
+
+# Stop Milestone 2 demo
+stop-milestone2:
+	@echo "Stopping Milestone 2 demo..."
+	@./scripts/stop_milestone2.sh
+
 
 # Display help
 help:
 	@echo "Available targets:"
 	@echo "  make build          - Build all binaries"
-	@echo "  make run-server     - Run server directly (optional: ARGS=\"-addr :9000 -rid S1 -init_state 0\")"
-	@echo "  make run-client     - Run client directly (optional: ARGS=\"-id 1 -server :9000\")"
-	@echo "  make run-lfd        - Run LFD directly (optional: ARGS=\"-target :9000 -hb 1s -timeout 3s -id LFD1\")"
+	@echo "  make run-server     - Run server directly (optional: ARGS=\"-addr :9001 -rid S1 -init_state 0\")"
+	@echo "  make run-client     - Run client directly (optional: ARGS=\"-id C1 -servers S1=:9001,S2=:9002,S3=:9003\")"
+	@echo "  make run-lfd        - Run LFD directly (optional: ARGS=\"-target :9001 -hb 1s -timeout 3s -id S1\")"
+	@echo "  make run-gfd        - Run GFD directly (optional: ARGS=\"-addr :8000\")"
+	@echo "  make run-milestone2 - Run Milestone 2 demo (GFD + 3 LFDs + 3 Servers + 3 Clients)"
+	@echo "  make stop-milestone2 - Stop Milestone 2 demo"
 	@echo "  make test           - Run tests"
 	@echo "  make fmt            - Format Go code"
 	@echo "  make vet            - Run static analysis"

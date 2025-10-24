@@ -17,15 +17,17 @@ const (
 )
 
 type RequestMessage struct {
-	Type     string `json:"type"`
-	ClientID string `json:"client_id"`
-	Message  string `json:"message"`
+	Type       string `json:"type"`
+	ClientID   string `json:"client_id"`
+	RequestNum int    `json:"request_num"`
+	Message    string `json:"message"`
 }
 
 type ResponseMessage struct {
 	Type        string `json:"type"`
 	ServerID    string `json:"server_id"`
 	ClientID    string `json:"client_id"`
+	RequestNum  int    `json:"request_num"`
 	ServerState int    `json:"server_state"`
 	Message     string `json:"message"`
 }
@@ -66,7 +68,8 @@ func (s *server) handleConnection(conn net.Conn) {
 			}
 
 			if reqMsg.Type == Req {
-				log.Printf("[SERVER][%s] received JSON request from client, clientId: %s, Message: %s", s.ReplicaId, reqMsg.ClientID, reqMsg.Message)
+				log.Printf("[SERVER][%s] received JSON request from client, clientId: %s, request_num: %d, Message: %s",
+					s.ReplicaId, reqMsg.ClientID, reqMsg.RequestNum, reqMsg.Message)
 				log.Printf("[SERVER][%s] server state before: %d", s.ReplicaId, s.ServerState)
 				s.ServerState++
 				log.Printf("[SERVER][%s] server state after: %d", s.ReplicaId, s.ServerState)
@@ -76,6 +79,7 @@ func (s *server) handleConnection(conn net.Conn) {
 					Type:        Resp,
 					ServerID:    s.ReplicaId,
 					ClientID:    reqMsg.ClientID,
+					RequestNum:  reqMsg.RequestNum,
 					ServerState: s.ServerState,
 					Message:     reqMsg.Message,
 				}
@@ -88,7 +92,8 @@ func (s *server) handleConnection(conn net.Conn) {
 				}
 
 				_ = utils.WriteLine(conn, string(jsonResp))
-				log.Printf("[SERVER][%s] sent JSON reply to client, clientId: %s, server state: %d, message: %s", s.ReplicaId, reqMsg.ClientID, s.ServerState, reqMsg.Message)
+				log.Printf("[SERVER][%s] sent JSON reply to client, clientId: %s, request_num: %d, server state: %d",
+					s.ReplicaId, reqMsg.ClientID, reqMsg.RequestNum, s.ServerState)
 			} else {
 				_ = utils.WriteLine(conn, "ERROR: unknown request type")
 			}
