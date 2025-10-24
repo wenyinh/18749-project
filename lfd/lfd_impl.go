@@ -22,8 +22,8 @@ const (
 )
 
 type lfd struct {
-	lfdID          string        // LFD's own ID
-	serverID       string        // Server's ID that this LFD is monitoring
+	lfdID          string // LFD's own ID
+	serverID       string // Server's ID that this LFD is monitoring
 	serverAddr     string
 	hbFreq         time.Duration
 	timeout        time.Duration
@@ -37,14 +37,19 @@ type lfd struct {
 	baseDelay      time.Duration
 	maxDelay       time.Duration
 	firstHeartbeat bool
-	replicaID      string // Deprecated: kept for compatibility, use serverID instead
 }
 
-func NewLFD(replicaID, serverAddr, gfdAddr string, hbFreq, timeout time.Duration, maxRetries int, baseDelay, maxDelay time.Duration) LFD {
+func getServerID(lfdID string) string {
+	if lfdID[:3] != "LFD" {
+		return ""
+	}
+	return "S" + lfdID[3:]
+}
+
+func NewLFD(lfdID, serverAddr, gfdAddr string, hbFreq, timeout time.Duration, maxRetries int, baseDelay, maxDelay time.Duration) LFD {
 	return &lfd{
-		lfdID:          replicaID,      // LFD's own ID
-		serverID:       replicaID,      // Server ID to monitor (same as replicaID for now)
-		replicaID:      replicaID,      // Backward compatibility
+		lfdID:          lfdID,              // LFD's own ID
+		serverID:       getServerID(lfdID), // Server ID to monitor
 		serverAddr:     serverAddr,
 		hbFreq:         hbFreq,
 		timeout:        timeout,
