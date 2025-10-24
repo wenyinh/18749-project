@@ -13,7 +13,7 @@ import (
 func main() {
 	servers := flag.String("servers", "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003", "server addresses (format: ID1=addr1,ID2=addr2,...)")
 	clientID := flag.String("id", "C1", "client identifier")
-	interval := flag.Duration("interval", 2*time.Second, "interval between requests")
+	interval := flag.Duration("interval", 3*time.Second, "interval between requests")
 	autoSend := flag.Bool("auto", false, "automatically send requests")
 	flag.Parse()
 

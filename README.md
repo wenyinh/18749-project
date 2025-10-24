@@ -100,14 +100,16 @@ Milestone 2 implements active replication with:
 #### Terminal 8-10 - Clients (auto mode)
 ```bash
 # Terminal 8 - Client C1
-./bin/client -id C1 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -interval 2s -auto
+./bin/client -id C1 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -auto
 
 # Terminal 9 - Client C2
-./bin/client -id C2 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -interval 2s -auto
+./bin/client -id C2 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -auto
 
 # Terminal 10 - Client C3
-./bin/client -id C3 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -interval 2s -auto
+./bin/client -id C3 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -auto
 ```
+
+**Note:** The default interval is 3s. You can override it with `-interval 2s` if needed.
 
 ### Milestone 2 Component Parameters
 
@@ -142,7 +144,7 @@ Milestone 2 implements active replication with:
 |-----------|-------------|---------|
 | `-id` | Client ID (C1, C2, C3) | `C1` |
 | `-servers` | Server list: `"ID1=addr1,ID2=addr2,..."` | - |
-| `-interval` | Request interval (auto mode) | `2s` |
+| `-interval` | Request interval (auto mode) | `3s` |
 | `-auto` | Enable auto-send mode | `false` |
 
 ### Milestone 2 Features
@@ -237,14 +239,14 @@ echo $! > run/lfd2.pid
 ./bin/lfd -target 127.0.0.1:9003 -id S3 -gfd 127.0.0.1:8000 -hb 1s -timeout 3s > logs/lfd3.log 2>&1 &
 echo $! > run/lfd3.pid
 
-# Clients
-./bin/client -id C1 -servers "S1=172.26.127.255:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -interval 2s -auto > logs/client1.log 2>&1 &
+# Clients (default interval is 3s)
+./bin/client -id C1 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -auto > logs/client1.log 2>&1 &
 echo $! > run/client1.pid
 
-./bin/client -id C2 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -interval 2s -auto > logs/client2.log 2>&1 &
+./bin/client -id C2 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -auto > logs/client2.log 2>&1 &
 echo $! > run/client2.pid
 
-./bin/client -id C3 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -interval 2s -auto > logs/client3.log 2>&1 &
+./bin/client -id C3 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -auto > logs/client3.log 2>&1 &
 echo $! > run/client3.pid
 
 # View logs
