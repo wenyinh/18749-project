@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	serverAddr := flag.String("server", "127.0.0.1:9000", "server address to connect")
+	serverAddr := flag.String("server", "172.26.11.183:9000", "server address to connect")
 	clientID := flag.Int("id", 1, "client identifier")
 	flag.Parse()
 
