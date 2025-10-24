@@ -5,5 +5,3 @@ type Client interface {
 	SendMessage(message string)
 	Close()
 }
-
-func NewClient(clientID string, serverAddrs map[string]string) Client
