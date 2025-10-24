@@ -18,7 +18,7 @@ LFD_SRC    := $(CMD_DIR)/lfd/lrunner.go
 GFD_SRC    := $(CMD_DIR)/gfd/grunner.go
 
 # ===== Phony Targets =====
-.PHONY: all build clean fmt vet test run-server run-client run-lfd run-gfd run-milestone2 stop-milestone2 help
+.PHONY: all build clean fmt vet test help
 
 # Default target
 all: build
@@ -65,87 +65,18 @@ vet:
 test:
 	$(GO) test -race ./...
 
-
-
-# Run individual components directly (use environment variables or pass your own args)
-# If ARGS is not provided, the binary will use its default flag values
-# Examples:
-#   make run-server ARGS="-addr :8080 -rid S2 -init_state 0"
-#   make run-client ARGS="-id 5 -server localhost:8080"
-#   make run-lfd ARGS="-target localhost:8080 -hb 1s -timeout 3s -id LFD2"
-#
-# Environment variables used by binaries (automatically loaded from .env):
-#   SERVER_ADDR, SERVER_REPLICA_ID, SERVER_INIT_STATE
-#   CLIENT_ID, CLIENT_TARGET_ADDR
-#   LFD_TARGET_ADDR, LFD_HB_FREQ, LFD_TIMEOUT, LFD_ID
-#
-# Environment variables are automatically loaded when no ARGS provided:
-#   make run-server    # uses .env defaults
-#   make run-client    # uses .env defaults
-#   make run-lfd       # uses .env defaults
-run-server: $(SERVER_BIN)
-	@if [ -n "$(ARGS)" ]; then \
-		echo "Running server with args: $(ARGS)"; \
-		$(SERVER_BIN) $(ARGS); \
-	else \
-		echo "Running server with environment variable defaults"; \
-		if [ -f .env ]; then . ./.env; fi; \
-		$(SERVER_BIN) $${SERVER_ADDR:+-addr $$SERVER_ADDR} $${SERVER_REPLICA_ID:+-rid $$SERVER_REPLICA_ID} $${SERVER_INIT_STATE:+-init_state $$SERVER_INIT_STATE}; \
-	fi
-
-run-client: $(CLIENT_BIN)
-	@if [ -n "$(ARGS)" ]; then \
-		echo "Running client with args: $(ARGS)"; \
-		$(CLIENT_BIN) $(ARGS); \
-	else \
-		echo "Running client with environment variable defaults"; \
-		if [ -f .env ]; then . ./.env; fi; \
-		$(CLIENT_BIN) $${CLIENT_ID:+-id $$CLIENT_ID} $${CLIENT_TARGET_ADDR:+-server $$CLIENT_TARGET_ADDR}; \
-	fi
-
-run-lfd: $(LFD_BIN)
-	@if [ -n "$(ARGS)" ]; then \
-		echo "Running lfd with args: $(ARGS)"; \
-		$(LFD_BIN) $(ARGS); \
-	else \
-		echo "Running lfd with environment variable defaults"; \
-		if [ -f .env ]; then . ./.env; fi; \
-		$(LFD_BIN) $${LFD_TARGET_ADDR:+-target $$LFD_TARGET_ADDR} $${LFD_HB_FREQ:+-hb $$LFD_HB_FREQ} $${LFD_TIMEOUT:+-timeout $$LFD_TIMEOUT} $${LFD_ID:+-id $$LFD_ID}; \
-	fi
-
-run-gfd: $(GFD_BIN)
-	@if [ -n "$(ARGS)" ]; then \
-		echo "Running gfd with args: $(ARGS)"; \
-		$(GFD_BIN) $(ARGS); \
-	else \
-		echo "Running gfd with environment variable defaults"; \
-		if [ -f .env ]; then . ./.env; fi; \
-		$(GFD_BIN) $${GFD_ADDR:+-addr $$GFD_ADDR}; \
-	fi
-
-# Run Milestone 2 demo
-run-milestone2: build
-	@echo "Starting Milestone 2 demo..."
-	@./scripts/run_milestone2.sh
-
-# Stop Milestone 2 demo
-stop-milestone2:
-	@echo "Stopping Milestone 2 demo..."
-	@./scripts/stop_milestone2.sh
-
-
 # Display help
 help:
 	@echo "Available targets:"
-	@echo "  make build          - Build all binaries"
-	@echo "  make run-server     - Run server directly (optional: ARGS=\"-addr :9001 -rid S1 -init_state 0\")"
-	@echo "  make run-client     - Run client directly (optional: ARGS=\"-id C1 -servers S1=:9001,S2=:9002,S3=:9003\")"
-	@echo "  make run-lfd        - Run LFD directly (optional: ARGS=\"-target :9001 -hb 1s -timeout 3s -id S1\")"
-	@echo "  make run-gfd        - Run GFD directly (optional: ARGS=\"-addr :8000\")"
-	@echo "  make run-milestone2 - Run Milestone 2 demo (GFD + 3 LFDs + 3 Servers + 3 Clients)"
-	@echo "  make stop-milestone2 - Stop Milestone 2 demo"
-	@echo "  make test           - Run tests"
-	@echo "  make fmt            - Format Go code"
-	@echo "  make vet            - Run static analysis"
-	@echo "  make clean          - Remove build artifacts and logs"
-	@echo "  make help           - Show this help message"
+	@echo "  make build   - Build all binaries (gfd, server, lfd, client)"
+	@echo "  make clean   - Remove build artifacts and logs"
+	@echo "  make fmt     - Format Go code"
+	@echo "  make vet     - Run static analysis"
+	@echo "  make test    - Run tests"
+	@echo "  make help    - Show this help message"
+	@echo ""
+	@echo "To run components, use the binaries directly:"
+	@echo "  ./bin/gfd -addr :8000"
+	@echo "  ./bin/server -addr :9001 -rid S1 -init_state 0"
+	@echo "  ./bin/lfd -target 127.0.0.1:9001 -id S1 -gfd 127.0.0.1:8000"
+	@echo "  ./bin/client -id C1 -servers \"S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003\" -auto"
