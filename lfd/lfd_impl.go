@@ -17,6 +17,8 @@ const (
 	register = "REGISTER"
 	ack      = "ACK"
 	nack     = "NACK"
+	gfdPing  = "GFD_PING"
+	gfdPong  = "GFD_PONG"
 )
 
 type lfd struct {
@@ -30,6 +32,7 @@ type lfd struct {
 	reader         *bufio.Reader
 	gfdAddr        string
 	gfdConn        net.Conn
+	gfdReader      *bufio.Reader
 	maxRetries     int
 	baseDelay      time.Duration
 	maxDelay       time.Duration
@@ -244,8 +247,55 @@ func (l *lfd) connectToGFD() error {
 		return err
 	}
 	l.gfdConn = conn
-	log.Printf("[LFD][%s] connected to GFD to monitor server %s", l.lfdID, l.serverID)
+	l.gfdReader = bufio.NewReader(conn)
+
+	// Send REGISTER message to GFD
+	registerMsg := fmt.Sprintf("REGISTER %s %s", l.serverID, l.lfdID)
+	err = utils.WriteLine(l.gfdConn, registerMsg)
+	if err != nil {
+		log.Printf("[LFD][%s] failed to register with GFD: %v", l.lfdID, err)
+		_ = l.gfdConn.Close()
+		l.gfdConn = nil
+		l.gfdReader = nil
+		return err
+	}
+
+	log.Printf("[LFD][%s] registered with GFD to monitor server %s", l.lfdID, l.serverID)
+
+	// Start goroutine to handle GFD heartbeats
+	go l.handleGFDHeartbeats()
+
 	return nil
+}
+
+func (l *lfd) handleGFDHeartbeats() {
+	log.Printf("[LFD][%s] starting GFD heartbeat handler", l.lfdID)
+	for {
+		if l.gfdReader == nil || l.gfdConn == nil {
+			log.Printf("[LFD][%s] GFD connection lost, stopping heartbeat handler", l.lfdID)
+			return
+		}
+
+		// Read message from GFD (blocking)
+		line, err := utils.ReadLine(l.gfdReader)
+		if err != nil {
+			log.Printf("[LFD][%s] GFD connection closed: %v", l.lfdID, err)
+			return
+		}
+
+		// Handle GFD_PING
+		if line == gfdPing {
+			// Respond with GFD_PONG
+			err := utils.WriteLine(l.gfdConn, gfdPong)
+			if err != nil {
+				log.Printf("[LFD][%s] failed to send GFD_PONG: %v", l.lfdID, err)
+				return
+			}
+			log.Printf("[LFD][%s] responded to GFD heartbeat with GFD_PONG", l.lfdID)
+		} else {
+			log.Printf("[LFD][%s] received unexpected message from GFD: %s", l.lfdID, line)
+		}
+	}
 }
 
 func (l *lfd) notifyGFD(action string) {

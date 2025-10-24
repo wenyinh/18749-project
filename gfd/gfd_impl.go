@@ -7,36 +7,58 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wenyinh/18749-project/utils"
 )
 
+const (
+	gfdPing = "GFD_PING"
+	gfdPong = "GFD_PONG"
+)
+
+type lfdInfo struct {
+	lfdID      string
+	serverID   string
+	conn       net.Conn
+	reader     *bufio.Reader
+	lastHB     time.Time
+	registered bool
+}
+
 type gfd struct {
 	addr         string
-	membership   []string          // List of server IDs
+	membership   []string               // List of server IDs
 	memberCount  int
-	serverToLFD  map[string]string // Map of server ID -> LFD ID
-	lfdConns     map[string]net.Conn // Map of LFD ID -> connection
+	serverToLFD  map[string]string      // Map of server ID -> LFD ID
+	lfdInfos     map[string]*lfdInfo    // Map of LFD ID -> LFD info
+	hbFreq       time.Duration          // Heartbeat frequency for GFD->LFD
+	timeout      time.Duration          // Heartbeat timeout
 	mu           sync.Mutex
 }
 
-func NewGFD(addr string) GFD {
+func NewGFD(addr string, hbFreq, timeout time.Duration) GFD {
 	return &gfd{
 		addr:        addr,
 		membership:  make([]string, 0),
 		memberCount: 0,
 		serverToLFD: make(map[string]string),
-		lfdConns:    make(map[string]net.Conn),
+		lfdInfos:    make(map[string]*lfdInfo),
+		hbFreq:      hbFreq,
+		timeout:     timeout,
 	}
 }
 
 func (g *gfd) Run() error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	listener := utils.MustListen(g.addr)
-	log.Printf("[GFD] listening on %s", g.addr)
+	log.Printf("[GFD] listening on %s, heartbeat freq=%s, timeout=%s", g.addr, g.hbFreq, g.timeout)
 
 	// Initial state
 	g.printMembership()
+
+	// Start heartbeat monitoring goroutine
+	go g.heartbeatMonitor()
 
 	for {
 		conn, err := listener.Accept()
@@ -50,8 +72,10 @@ func (g *gfd) Run() error {
 
 func (g *gfd) handleConnection(conn net.Conn) {
 	var lfdID string
+	var info *lfdInfo
+
 	defer func() {
-		// When LFD disconnects, log it but DON'T remove server from membership
+		// When LFD disconnects, mark it as down
 		if lfdID != "" {
 			g.handleLFDDisconnection(lfdID)
 		}
@@ -68,19 +92,52 @@ func (g *gfd) handleConnection(conn net.Conn) {
 		}
 
 		parts := strings.Fields(line)
-		if len(parts) < 3 {
-			log.Printf("[GFD] invalid message (expected 'CMD SERVER_ID LFD_ID'): %s", line)
+		if len(parts) < 1 {
 			continue
 		}
 
 		command := strings.ToUpper(parts[0])
+
+		// Handle REGISTER command
+		if command == "REGISTER" && len(parts) == 3 {
+			serverID := parts[1]
+			lfdID = parts[2]
+
+			// Create LFD info and store connection
+			g.mu.Lock()
+			info = &lfdInfo{
+				lfdID:      lfdID,
+				serverID:   serverID,
+				conn:       conn,
+				reader:     r,
+				lastHB:     time.Now(),
+				registered: true,
+			}
+			g.lfdInfos[lfdID] = info
+			g.mu.Unlock()
+
+			log.Printf("[GFD] LFD %s registered to monitor server %s", lfdID, serverID)
+			continue
+		}
+
+		// Handle GFD_PONG (heartbeat response from LFD)
+		if command == "GFD_PONG" {
+			g.mu.Lock()
+			if info != nil {
+				info.lastHB = time.Now()
+			}
+			g.mu.Unlock()
+			continue
+		}
+
+		// Handle ADD/DELETE commands (legacy format: CMD SERVER_ID LFD_ID)
+		if len(parts) < 3 {
+			log.Printf("[GFD] invalid message: %s", line)
+			continue
+		}
+
 		serverID := parts[1]
 		lfdID = parts[2]
-
-		// Store connection for this LFD
-		g.mu.Lock()
-		g.lfdConns[lfdID] = conn
-		g.mu.Unlock()
 
 		switch command {
 		case "ADD":
@@ -97,22 +154,95 @@ func (g *gfd) handleLFDDisconnection(lfdID string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	// Find which server this LFD was monitoring
-	var serverID string
-	for sID, lID := range g.serverToLFD {
-		if lID == lfdID {
-			serverID = sID
-			break
+	info, exists := g.lfdInfos[lfdID]
+	if !exists {
+		log.Printf("[GFD] LFD %s disconnected (not registered)", lfdID)
+		return
+	}
+
+	serverID := info.serverID
+	delete(g.lfdInfos, lfdID)
+
+	log.Printf("[GFD] LFD %s disconnected (was monitoring server %s), NOT removing server from membership", lfdID, serverID)
+}
+
+// heartbeatMonitor periodically sends heartbeats to all registered LFDs
+func (g *gfd) heartbeatMonitor() {
+	ticker := time.NewTicker(g.hbFreq)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		g.mu.Lock()
+		lfdsToCheck := make([]*lfdInfo, 0, len(g.lfdInfos))
+		for _, info := range g.lfdInfos {
+			if info.registered {
+				lfdsToCheck = append(lfdsToCheck, info)
+			}
+		}
+		g.mu.Unlock()
+
+		// Send heartbeats to each LFD
+		for _, info := range lfdsToCheck {
+			go g.sendHeartbeatToLFD(info)
+		}
+	}
+}
+
+// sendHeartbeatToLFD sends a heartbeat to a specific LFD and checks for timeout
+func (g *gfd) sendHeartbeatToLFD(info *lfdInfo) {
+	// Check if last heartbeat response is too old
+	g.mu.Lock()
+	timeSinceLastHB := time.Since(info.lastHB)
+	lfdID := info.lfdID
+	serverID := info.serverID
+	conn := info.conn
+	g.mu.Unlock()
+
+	if timeSinceLastHB > g.timeout {
+		log.Printf("[GFD] LFD %s (monitoring %s) failed to respond to heartbeat (timeout=%s) <-- DETECTED LFD FAILURE",
+			lfdID, serverID, g.timeout)
+
+		// Remove LFD from tracking and delete server from membership
+		g.handleLFDFailure(lfdID, serverID)
+		return
+	}
+
+	// Send GFD_PING
+	if conn != nil {
+		err := utils.WriteLine(conn, gfdPing)
+		if err != nil {
+			log.Printf("[GFD] failed to send heartbeat to LFD %s: %v", lfdID, err)
+			g.handleLFDFailure(lfdID, serverID)
+		}
+	}
+}
+
+// handleLFDFailure is called when LFD fails to respond to heartbeats
+func (g *gfd) handleLFDFailure(lfdID string, serverID string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	// Remove LFD from tracking
+	delete(g.lfdInfos, lfdID)
+
+	// Remove server from membership
+	found := false
+	newMembership := make([]string, 0, len(g.membership))
+	for _, member := range g.membership {
+		if member != serverID {
+			newMembership = append(newMembership, member)
+		} else {
+			found = true
 		}
 	}
 
-	// Remove connection
-	delete(g.lfdConns, lfdID)
+	if found {
+		g.membership = newMembership
+		g.memberCount = len(g.membership)
+		delete(g.serverToLFD, serverID)
 
-	if serverID != "" {
-		log.Printf("[GFD] LFD %s disconnected (was monitoring server %s), but NOT removing server from membership", lfdID, serverID)
-	} else {
-		log.Printf("[GFD] LFD %s disconnected", lfdID)
+		log.Printf("[GFD] removed server %s from membership due to LFD %s failure", serverID, lfdID)
+		g.printMembershipLocked()
 	}
 }
 

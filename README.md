@@ -70,7 +70,7 @@ Milestone 2 implements active replication with:
 
 #### Terminal 1 - GFD
 ```bash
-./bin/gfd -addr :8000
+./bin/gfd -addr :8000 -hb 1s -timeout 3s
 ```
 
 #### Terminal 2-4 - Servers
@@ -115,6 +115,8 @@ Milestone 2 implements active replication with:
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `-addr` | Listen address | `:8000` |
+| `-hb` | Heartbeat frequency for GFD→LFD | `1s` |
+| `-timeout` | Heartbeat timeout | `3s` |
 
 **Server:**
 | Parameter | Description | Default |
@@ -157,18 +159,39 @@ Milestone 2 implements active replication with:
 
 #### Important Architecture Notes
 
+**Two-Level Heartbeat Architecture:**
+
+The system implements a two-level heartbeat mechanism:
+
+1. **Level 1: GFD ↔ LFD Heartbeating** (Machine/LFD Failure Detection)
+   - GFD periodically sends `GFD_PING` to each registered LFD
+   - LFD responds with `GFD_PONG`
+   - If LFD fails to respond within timeout, GFD detects LFD/machine failure
+   - GFD removes the server from membership when LFD heartbeat fails
+
+2. **Level 2: LFD ↔ Server Heartbeating** (Local Server Process Detection)
+   - LFD periodically sends `PING` to its local server
+   - Server responds with `PONG`
+   - If server fails to respond, LFD detects server process failure
+   - LFD notifies GFD with `DELETE` message
+
 **LFD Registration Protocol:**
-- When LFD starts, it declares which server (by ID) it intends to monitor
+- When LFD starts, it first registers with GFD using `REGISTER <serverID> <lfdID>`
+- GFD tracks which LFD is monitoring which server
+- Then LFD connects to its local server and validates server ID matches
 - Server validates that the declared server ID matches its own `ReplicaId`
 - Connection is rejected if names don't match
-- This ensures proper server-LFD pairing
 
 **GFD Membership Management:**
 - GFD membership list displays **server IDs** (e.g., S1, S2, S3), **not LFD IDs**
-- LFDs report their monitored server's ID to GFD (not their own ID)
-- When LFD sends `ADD S1 LFD1`, GFD adds `S1` to membership (monitored by `LFD1`)
-- If LFD disconnects (network issue, crash), GFD logs: "LFD X disconnected (was monitoring server Y), but NOT removing server from membership"
-- Servers are only removed when LFD explicitly sends `DELETE` (after detecting server failure)
+- GFD maintains a mapping of server → LFD for tracking purposes
+- Servers are removed from membership in two scenarios:
+  1. **LFD heartbeat failure**: GFD detects LFD is down (no GFD_PONG response)
+  2. **Server failure notification**: LFD sends `DELETE` after detecting local server failure
+
+**Connection Handling:**
+- If LFD TCP connection drops but no heartbeat timeout yet, GFD logs disconnection but doesn't remove server
+- Only heartbeat timeout triggers server removal from membership
 
 ### Testing Fault Tolerance
 
@@ -191,7 +214,7 @@ If you prefer to run components in the background:
 mkdir -p logs run
 
 # GFD
-./bin/gfd -addr 0.0.0.0:8000 > logs/gfd.log 2>&1 &
+./bin/gfd -addr 0.0.0.0:8000 -hb 1s -timeout 3s > logs/gfd.log 2>&1 &
 echo $! > run/gfd.pid
 
 # Servers
@@ -348,8 +371,12 @@ All components write detailed logs to the `logs/` directory:
 │                         GFD                              │
 │                    (Port 8000)                          │
 │              membership: [S1, S2, S3]                   │
+│         Heartbeat: GFD_PING/GFD_PONG (1s)              │
 └─────────────────────────────────────────────────────────┘
          ▲           ▲           ▲
+         │GFD_PING   │GFD_PING   │GFD_PING
+         │GFD_PONG   │GFD_PONG   │GFD_PONG
+         │REGISTER   │REGISTER   │REGISTER
          │ADD/DELETE │ADD/DELETE │ADD/DELETE
          │           │           │
     ┌────┴────┐ ┌────┴────┐ ┌────┴────┐
@@ -357,6 +384,7 @@ All components write detailed logs to the `logs/` directory:
     │  (S1)   │ │  (S2)   │ │  (S3)   │
     └────┬────┘ └────┬────┘ └────┬────┘
          │PING/PONG  │PING/PONG  │PING/PONG
+         │(1s)       │(1s)       │(1s)
          ▼           ▼           ▼
     ┌────────┐  ┌────────┐  ┌────────┐
     │   S1   │  │   S2   │  │   S3   │
@@ -373,6 +401,10 @@ All components write detailed logs to the `logs/` directory:
         │  C1  │ │  C2  │ │  C3  │
         └──────┘ └──────┘ └──────┘
 ```
+
+**Two-Level Heartbeating:**
+- **Level 1 (GFD ↔ LFD)**: Detects machine/LFD failures
+- **Level 2 (LFD ↔ Server)**: Detects local server process failures
 
 ---
 
