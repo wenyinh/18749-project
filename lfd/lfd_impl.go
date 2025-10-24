@@ -60,26 +60,18 @@ func (l *lfd) Run() error {
 	log.Printf("[LFD][%s] starting; monitoring server=%s at %s freq=%s timeout=%s",
 		l.lfdID, l.serverID, l.serverAddr, l.hbFreq, l.timeout)
 
-	// Connect to GFD
+	// Connect to GFD first (GFD should be running)
 	if err := l.connectToGFD(); err != nil {
 		log.Printf("[LFD][%s] failed to connect to GFD at %s: %v", l.lfdID, l.gfdAddr, err)
 		return err
 	}
 
-	// Try initial connection to server
-	if l.conn == nil {
-		if err := l.connectWithRetry(); err != nil {
-			log.Printf("[LFD][%s] failed to connect to server %s after retries", l.lfdID, l.serverID)
-			l.notifyGFD("DELETE")
-			fmt.Printf("SERVER %s DOWN\n", l.serverID)
-			os.Exit(0)
-		}
-	}
+	log.Printf("[LFD][%s] registered with GFD, waiting for server %s to start...", l.lfdID, l.serverID)
 
-	// Send one immediate heartbeat
-	l.sendOneHeartbeat()
+	// Don't exit if server is not running yet - keep trying in heartbeat loop
+	// Server will be started later by the user
 
-	// Then continue periodically
+	// Start heartbeat loop - will continuously try to connect to server
 	t := time.NewTicker(l.hbFreq)
 	defer t.Stop()
 
@@ -93,6 +85,13 @@ func (l *lfd) Run() error {
 func (l *lfd) sendOneHeartbeat() {
 	if l.conn == nil {
 		if err := l.connectWithRetry(); err != nil {
+			// If we never had a successful connection (firstHeartbeat == true),
+			// then server hasn't started yet - just keep waiting
+			if l.firstHeartbeat {
+				log.Printf("[LFD][%s] server %s not available yet, waiting...", l.lfdID, l.serverID)
+				return
+			}
+			// If we HAD a connection before, this is a real failure
 			log.Printf("[LFD][%s] connect failed after retries; server %s appears to be down", l.lfdID, l.serverID)
 			l.notifyGFD("DELETE")
 			fmt.Printf("SERVER %s DOWN\n", l.serverID)
