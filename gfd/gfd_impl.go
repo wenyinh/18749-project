@@ -130,21 +130,34 @@ func (g *gfd) handleConnection(conn net.Conn) {
 			continue
 		}
 
-		// Handle ADD/DELETE commands (legacy format: CMD SERVER_ID LFD_ID)
-		if len(parts) < 3 {
-			log.Printf("[GFD] invalid message: %s", line)
-			continue
-		}
-
-		serverID := parts[1]
-		lfdID = parts[2]
-
-		switch command {
-		case "ADD":
-			g.addReplica(serverID, lfdID)
-		case "DELETE":
-			g.deleteReplica(serverID, lfdID)
-		default:
+		// Handle ADD/DELETE commands
+		// ADD can be 2 or 3 parts: "ADD S1" or "ADD S1 LFD1"
+		// DELETE should be 3 parts: "DELETE S1 LFD1"
+		if command == "ADD" && len(parts) >= 2 {
+			serverID := parts[1]
+			// If LFD ID not provided in ADD message, use the registered LFD ID
+			if len(parts) == 3 {
+				lfdID = parts[2]
+			}
+			// Only add if we have a registered LFD for this connection
+			if info != nil && info.registered {
+				g.addReplica(serverID, info.lfdID)
+			} else {
+				log.Printf("[GFD] received ADD from unregistered LFD, ignoring")
+			}
+		} else if command == "DELETE" && len(parts) >= 2 {
+			serverID := parts[1]
+			if len(parts) == 3 {
+				lfdID = parts[2]
+			} else if info != nil {
+				lfdID = info.lfdID
+			}
+			if lfdID != "" {
+				g.deleteReplica(serverID, lfdID)
+			} else {
+				log.Printf("[GFD] received DELETE but cannot identify LFD")
+			}
+		} else if command != "ADD" && command != "DELETE" {
 			log.Printf("[GFD] unknown command: %s", command)
 		}
 	}
