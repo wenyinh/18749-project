@@ -188,11 +188,12 @@ func (c *client) sendToReplica(replica *ReplicaConnection, req QueuedRequest, re
 	replica.mu.Lock()
 
 	if !replica.IsHealthy || replica.Conn == nil {
-		// Queue the request and trigger reconnection
-		c.enqueueRequest(replica, req)
+		// Queue the request (already holding lock, so call internal version)
+		c.enqueueRequestLocked(replica, req)
+		queueSize := len(replica.Queue)
 		replica.mu.Unlock()
 		log.Printf("[%s→%s] Connection down, queued request_num=%d (queue size: %d)",
-			c.clientID, replica.ServerID, req.RequestNum, len(replica.Queue))
+			c.clientID, replica.ServerID, req.RequestNum, queueSize)
 		go c.attemptReconnect(replica)
 		return
 	}
@@ -250,7 +251,12 @@ func (c *client) sendToReplica(replica *ReplicaConnection, req QueuedRequest, re
 func (c *client) enqueueRequest(replica *ReplicaConnection, req QueuedRequest) {
 	replica.mu.Lock()
 	defer replica.mu.Unlock()
+	c.enqueueRequestLocked(replica, req)
+}
 
+// enqueueRequestLocked adds a request to the queue without acquiring the lock
+// Caller must hold replica.mu.Lock()
+func (c *client) enqueueRequestLocked(replica *ReplicaConnection, req QueuedRequest) {
 	if len(replica.Queue) >= c.maxQueueSize {
 		log.Printf("[%s→%s] Queue full (%d), dropping oldest request",
 			c.clientID, replica.ServerID, c.maxQueueSize)

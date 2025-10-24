@@ -100,7 +100,7 @@ Milestone 2 implements active replication with:
 #### Terminal 8-10 - Clients (auto mode)
 ```bash
 # Terminal 8 - Client C1
-./bin/client -id C1 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -auto
+./bin/client -id C1 -servers "S1=172.26.123.0:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -auto
 
 # Terminal 9 - Client C2
 ./bin/client -id C2 -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -auto
