@@ -35,13 +35,14 @@ type QueuedRequest struct {
 }
 
 type ReplicaConnection struct {
-	ServerID  string
-	Addr      string
-	Conn      net.Conn
-	IsHealthy bool
-	Queue     []QueuedRequest
-	mu        sync.Mutex
-	reader    *bufio.Reader
+	ServerID     string
+	Addr         string
+	Conn         net.Conn
+	IsHealthy    bool
+	Queue        []QueuedRequest
+	mu           sync.Mutex
+	reader       *bufio.Reader
+	reconnecting bool // Flag to prevent multiple reconnection attempts
 }
 
 type client struct {
@@ -285,7 +286,21 @@ func (c *client) attemptReconnect(replica *ReplicaConnection) {
 		replica.mu.Unlock()
 		return
 	}
+	if replica.reconnecting {
+		// Another goroutine is already trying to reconnect
+		replica.mu.Unlock()
+		return
+	}
+	// Mark as reconnecting to prevent multiple concurrent attempts
+	replica.reconnecting = true
 	replica.mu.Unlock()
+
+	// Ensure we clear the reconnecting flag when done
+	defer func() {
+		replica.mu.Lock()
+		replica.reconnecting = false
+		replica.mu.Unlock()
+	}()
 
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
 		delay := c.calculateBackoffDelay(attempt)

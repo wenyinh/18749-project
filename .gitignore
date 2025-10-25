@@ -24,3 +24,4 @@ go.sum
 # OS files
 .DS_Store
 Thumbs.db
+test_deadlock_fix.sh
