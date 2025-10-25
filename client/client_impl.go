@@ -35,14 +35,15 @@ type QueuedRequest struct {
 }
 
 type ReplicaConnection struct {
-	ServerID     string
-	Addr         string
-	Conn         net.Conn
-	IsHealthy    bool
-	Queue        []QueuedRequest
-	mu           sync.Mutex
-	reader       *bufio.Reader
-	reconnecting bool // Flag to prevent multiple reconnection attempts
+	ServerID        string
+	Addr            string
+	Conn            net.Conn
+	IsHealthy       bool
+	Queue           []QueuedRequest
+	mu              sync.Mutex
+	reader          *bufio.Reader
+	reconnecting    bool // Flag to prevent multiple reconnection attempts
+	permanentlyDown bool // Flag to mark replica as permanently unreachable
 }
 
 type client struct {
@@ -188,6 +189,14 @@ func (c *client) SendMessage(message string) {
 func (c *client) sendToReplica(replica *ReplicaConnection, req QueuedRequest, responseChan chan ResponseMessage) {
 	replica.mu.Lock()
 
+	// Check if replica is permanently down - skip it entirely
+	if replica.permanentlyDown {
+		replica.mu.Unlock()
+		log.Printf("[%s→%s] Replica permanently down, skipping request_num=%d",
+			c.clientID, replica.ServerID, req.RequestNum)
+		return
+	}
+
 	if !replica.IsHealthy || replica.Conn == nil {
 		// Queue the request (already holding lock, so call internal version)
 		c.enqueueRequestLocked(replica, req)
@@ -326,6 +335,11 @@ func (c *client) attemptReconnect(replica *ReplicaConnection) {
 
 	log.Printf("[%s→%s] Reconnection failed after %d attempts, replica marked as permanently down",
 		c.clientID, replica.ServerID, c.maxRetries)
+
+	// Mark replica as permanently down so future requests skip it
+	replica.mu.Lock()
+	replica.permanentlyDown = true
+	replica.mu.Unlock()
 }
 
 func (c *client) flushQueue(replica *ReplicaConnection) {
