@@ -132,7 +132,21 @@ func (c *client) connectReplica(replica *ReplicaConnection) error {
 	replica.Conn = conn
 	replica.reader = bufio.NewReader(conn)
 	replica.IsHealthy = true
+	replica.permanentlyDown = false
 	return nil
+}
+
+func (c *client) activeReplicas() []*ReplicaConnection {
+	targets := make([]*ReplicaConnection, 0, len(c.replicas))
+	for _, r := range c.replicas {
+		r.mu.Lock()
+		down := r.permanentlyDown
+		r.mu.Unlock()
+		if !down {
+			targets = append(targets, r)
+		}
+	}
+	return targets
 }
 
 func (c *client) SendMessage(message string) {
@@ -147,14 +161,20 @@ func (c *client) SendMessage(message string) {
 		Timestamp:  time.Now(),
 	}
 
-	log.Printf("[%s] Sending request_num=%d to all replicas", c.clientID, reqNum)
+	targets := c.activeReplicas()
+	if len(targets) == 0 {
+		log.Printf("[%s] No active replicas (all permanently down). Drop request_num=%d", c.clientID, reqNum)
+		return
+	}
+
+	log.Printf("[%s] Sending request_num=%d to %d replicas", c.clientID, reqNum, len(targets))
 
 	// Channel to collect responses
-	responseChan := make(chan ResponseMessage, len(c.replicas))
+	responseChan := make(chan ResponseMessage, len(targets))
 	var wg sync.WaitGroup
 
 	// Send to all replicas
-	for _, replica := range c.replicas {
+	for _, replica := range targets {
 		wg.Add(1)
 		go func(r *ReplicaConnection) {
 			defer wg.Done()
@@ -201,7 +221,11 @@ func (c *client) sendToReplica(replica *ReplicaConnection, req QueuedRequest, re
 		// Queue the request (already holding lock, so call internal version)
 		c.enqueueRequestLocked(replica, req)
 		queueSize := len(replica.Queue)
+		permDown := replica.permanentlyDown
 		replica.mu.Unlock()
+		if permDown {
+			return
+		}
 		log.Printf("[%s→%s] Connection down, queued request_num=%d (queue size: %d)",
 			c.clientID, replica.ServerID, req.RequestNum, queueSize)
 		go c.attemptReconnect(replica)
@@ -261,6 +285,11 @@ func (c *client) sendToReplica(replica *ReplicaConnection, req QueuedRequest, re
 func (c *client) enqueueRequest(replica *ReplicaConnection, req QueuedRequest) {
 	replica.mu.Lock()
 	defer replica.mu.Unlock()
+	if replica.permanentlyDown {
+		log.Printf("[%s→%s] Permanently down; drop queued request_num=%d",
+			c.clientID, replica.ServerID, req.RequestNum)
+		return
+	}
 	c.enqueueRequestLocked(replica, req)
 }
 
@@ -291,6 +320,10 @@ func (c *client) markUnhealthy(replica *ReplicaConnection) {
 func (c *client) attemptReconnect(replica *ReplicaConnection) {
 	// Check if already healthy or another goroutine is reconnecting
 	replica.mu.Lock()
+	if replica.permanentlyDown {
+		replica.mu.Unlock()
+		return
+	}
 	if replica.IsHealthy {
 		replica.mu.Unlock()
 		return
@@ -312,6 +345,13 @@ func (c *client) attemptReconnect(replica *ReplicaConnection) {
 	}()
 
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
+		replica.mu.Lock()
+		if replica.permanentlyDown {
+			replica.mu.Unlock()
+			return
+		}
+		replica.mu.Unlock()
+
 		delay := c.calculateBackoffDelay(attempt)
 		log.Printf("[%s→%s] Reconnecting in %v (attempt %d/%d)...",
 			c.clientID, replica.ServerID, delay, attempt+1, c.maxRetries)
