@@ -6,6 +6,8 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/wenyinh/18749-project/utils"
 )
@@ -18,6 +20,13 @@ const (
 	Register = "REGISTER"
 	Ack      = "ACK"
 	Nack     = "NACK"
+)
+
+type Role int
+
+const (
+	Primary Role = iota
+	Backup
 )
 
 type RequestMessage struct {
@@ -36,10 +45,23 @@ type ResponseMessage struct {
 	Message     string `json:"message"`
 }
 
+type CheckpointMessage struct {
+	Type          string `json:"type"`
+	ReplicaId     string `json:"replica_id"`
+	ServerState   int    `json:"server_state"`
+	CheckpointNum int    `json:"checkpoint_num"`
+}
+
 type server struct {
-	Addr        string
-	ReplicaId   string
-	ServerState int
+	Addr           string
+	ReplicaId      string
+	ServerState    int
+	ServerRole     Role
+	Backups        map[string]string
+	BackupConns    map[string]net.Conn
+	CheckpointFreq time.Duration
+	CheckpointNo   int
+	mu             sync.Mutex
 }
 
 func NewServer(addr, replicaId string, serverState int) Server {
