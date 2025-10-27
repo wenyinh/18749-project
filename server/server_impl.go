@@ -77,6 +77,12 @@ func NewServer(
 	backupConns map[string]net.Conn,
 	ckptFreq time.Duration,
 ) Server {
+	if backups == nil {
+		backups = make(map[string]string)
+	}
+	if backupConns == nil {
+		backupConns = make(map[string]net.Conn)
+	}
 	s := &server{
 		Addr:           addr,
 		ReplicaId:      replicaId,
@@ -197,6 +203,12 @@ func (s *server) handleConnection(conn net.Conn) {
 			}
 			if s.ServerRole == Backup {
 				s.mu.Lock()
+				if ckpt.CheckpointNum <= s.CheckpointNo {
+					s.mu.Unlock()
+					log.Printf("[SERVER][%s] ignore stale checkpoint from %s: recv=%d <= local=%d",
+						s.ReplicaId, ckpt.ReplicaId, ckpt.CheckpointNum, s.CheckpointNo)
+					continue
+				}
 				s.ServerState = ckpt.ServerState
 				s.CheckpointNo = ckpt.CheckpointNum
 				s.mu.Unlock()
@@ -209,8 +221,95 @@ func (s *server) handleConnection(conn net.Conn) {
 	}
 }
 
+func (s *server) dialBackups() {
+	if s.ServerRole != Primary {
+		return
+	}
+	type target struct {
+		id, addr string
+	}
+	var todo []target
+	s.mu.Lock()
+	for bid, baddr := range s.Backups {
+		if _, ok := s.BackupConns[bid]; !ok {
+			todo = append(todo, target{id: bid, addr: baddr})
+		}
+	}
+	s.mu.Unlock()
+	for _, t := range todo {
+		conn, err := net.Dial("tcp", t.addr)
+		if err != nil {
+			log.Printf("[SERVER][%s] dial backup %s@%s failed: %v", s.ReplicaId, t.id, t.addr, err)
+			continue
+		}
+		s.mu.Lock()
+		if old, ok := s.BackupConns[t.id]; ok && old != nil {
+			_ = conn.Close()
+		} else {
+			s.BackupConns[t.id] = conn
+			log.Printf("[SERVER][%s] secondary channel established to backup %s@%s",
+				s.ReplicaId, t.id, t.addr)
+		}
+		s.mu.Unlock()
+	}
+}
+
+func (s *server) sendCheckpoint() {
+	if s.ServerRole != Primary {
+		return
+	}
+	s.mu.Lock()
+	ckpt := CheckpointMessage{
+		Type:          Checkpoint,
+		ReplicaId:     s.ReplicaId,
+		ServerState:   s.ServerState,
+		CheckpointNum: s.CheckpointNo + 1,
+	}
+	s.CheckpointNo++
+	conns := make(map[string]net.Conn, len(s.BackupConns))
+	for id, c := range s.BackupConns {
+		conns[id] = c
+	}
+	s.mu.Unlock()
+
+	payload, err := json.Marshal(ckpt)
+	if err != nil {
+		log.Printf("[SERVER][%s] marshal checkpoint failed: %v", s.ReplicaId, err)
+		return
+	}
+	line := string(payload)
+
+	for bid, c := range conns {
+		if c == nil {
+			continue
+		}
+		if err := utils.WriteLine(c, line); err != nil {
+			log.Printf("[SERVER][%s] send checkpoint to %s failed: %v (will drop conn)", s.ReplicaId, bid, err)
+			s.mu.Lock()
+			if old, ok := s.BackupConns[bid]; ok {
+				_ = old.Close()
+				delete(s.BackupConns, bid)
+			}
+			s.mu.Unlock()
+		} else {
+			log.Printf("[SERVER][%s] checkpoint #%d sent to %s (server_state=%d)",
+				s.ReplicaId, ckpt.CheckpointNum, bid, ckpt.ServerState)
+		}
+	}
+}
+
 func (s *server) Run() error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	if s.ServerRole == Primary && s.CheckpointFreq > 0 {
+		go func() {
+			t := time.NewTicker(s.CheckpointFreq)
+			defer t.Stop()
+			for range t.C {
+				s.dialBackups()
+				s.sendCheckpoint()
+			}
+		}()
+	}
 	listener := utils.MustListen(s.Addr)
 	log.Printf("[SERVER][%s] listening on %s", s.ReplicaId, s.Addr)
 	for {

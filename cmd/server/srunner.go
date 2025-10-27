@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"log"
-	"net"
 	"strings"
 	"time"
 
@@ -55,28 +54,18 @@ func main() {
 	}
 
 	var backups map[string]string
-	var backupConns map[string]net.Conn
 	if role == server.Primary {
 		backups = parseBackups(*backupsFlag)
-		backupConns = make(map[string]net.Conn)
-		for bid, baddr := range backups {
-			conn, err := net.Dial("tcp", baddr)
-			if err != nil {
-				log.Printf("[SRUNNER][%s] WARN: connect backup %s@%s failed: %v (will still start server; checkpoint send will try on this conn)", *rid, bid, baddr, err)
-				continue
-			}
-			backupConns[bid] = conn
-			log.Printf("[SRUNNER][%s] connected secondary channel to backup %s@%s", *rid, bid, baddr)
-		}
+	} else {
+		backups = nil
 	}
-
 	s := server.NewServer(
 		*addr,
 		*rid,
 		*init,
 		role,
 		backups,
-		backupConns,
+		nil,
 		time.Duration(*ckptMs)*time.Millisecond,
 	)
 	if err := s.Run(); err != nil {
