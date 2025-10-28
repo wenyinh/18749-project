@@ -49,6 +49,7 @@ type ReplicaConnection struct {
 type client struct {
 	clientID       string
 	replicas       []*ReplicaConnection
+	primaryID      string
 	requestNum     int
 	maxQueueSize   int
 	maxRetries     int
@@ -58,7 +59,7 @@ type client struct {
 	replyMu        sync.Mutex
 }
 
-func NewClient(clientID string, serverAddrs map[string]string) Client {
+func NewClient(clientID string, serverAddrs map[string]string, primaryID string) Client {
 	replicas := make([]*ReplicaConnection, 0, len(serverAddrs))
 	for serverID, addr := range serverAddrs {
 		replicas = append(replicas, &ReplicaConnection{
@@ -72,6 +73,7 @@ func NewClient(clientID string, serverAddrs map[string]string) Client {
 	return &client{
 		clientID:       clientID,
 		replicas:       replicas,
+		primaryID:      primaryID,
 		requestNum:     0,
 		maxQueueSize:   100,
 		maxRetries:     5,
@@ -161,7 +163,13 @@ func (c *client) SendMessage(message string) {
 		Timestamp:  time.Now(),
 	}
 
-	targets := c.activeReplicas()
+	var targets []*ReplicaConnection
+	for _, r := range c.activeReplicas() {
+		if r.ServerID == c.primaryID {
+			targets = append(targets, r)
+			break
+		}
+	}
 	if len(targets) == 0 {
 		log.Printf("[%s] No active replicas (all permanently down). Drop request_num=%d", c.clientID, reqNum)
 		return

@@ -15,6 +15,7 @@ func main() {
 	clientID := flag.String("id", "C1", "client identifier")
 	interval := flag.Duration("interval", 3*time.Second, "interval between requests")
 	autoSend := flag.Bool("auto", false, "automatically send requests")
+	primary := flag.String("primary", "S1", "primary replica id")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -26,7 +27,7 @@ func main() {
 	}
 
 	// Create client
-	c := client.NewClient(*clientID, serverAddrs)
+	c := client.NewClient(*clientID, serverAddrs, *primary)
 
 	// Connect
 	if err := c.Connect(); err != nil {
