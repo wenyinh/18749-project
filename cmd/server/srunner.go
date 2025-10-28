@@ -39,7 +39,7 @@ func main() {
 
 	roleFlag := flag.String("role", "primary", "server role: primary|backup")
 	backupsFlag := flag.String("backups", "", "for primary only, comma-separated list: S2=ip:port,S3=ip:port")
-	ckptMs := flag.Int("ckpt_ms", 3000, "checkpoint interval in milliseconds (primary only)")
+	ckptMs := flag.Int("ckpt_ms", 5000, "checkpoint interval in milliseconds (primary only)")
 	flag.Parse()
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
