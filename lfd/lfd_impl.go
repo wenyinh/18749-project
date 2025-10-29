@@ -124,8 +124,10 @@ func (l *lfd) sendOneHeartbeat() {
 		}
 		return
 	}
-	log.Printf("[%s] [heartbeat_count=%d] LFD->S send heartbeat: '%s'",
-		l.lfdTag(), l.heartbeatCnt, hb)
+	cyan := "\033[36m"
+	reset := "\033[0m"
+	log.Printf("%s[%s] [heartbeat_count=%d] LFD->S send heartbeat: '%s'%s",
+		cyan, l.lfdTag(), l.heartbeatCnt, hb, reset)
 
 	// Expect PONG
 	_ = l.conn.SetReadDeadline(time.Now().Add(l.timeout))
@@ -147,8 +149,8 @@ func (l *lfd) sendOneHeartbeat() {
 	}
 
 	if line == pong {
-		log.Printf("[%s] [heartbeat_count=%d] S->LFD recv heartbeat reply: '%s'",
-			l.lfdTag(), l.heartbeatCnt, line)
+		log.Printf("%s[%s] [heartbeat_count=%d] S->LFD recv heartbeat reply: '%s'%s",
+			cyan, l.lfdTag(), l.heartbeatCnt, line, reset)
 
 		// If this is the first successful heartbeat, notify GFD
 		if l.firstHeartbeat {

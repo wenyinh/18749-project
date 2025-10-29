@@ -316,12 +316,14 @@ func (g *gfd) printMembership() {
 }
 
 func (g *gfd) printMembershipLocked() {
+	red := "\033[31m"
+	reset := "\033[0m"
 	if g.memberCount == 0 {
-		fmt.Printf("GFD: 0 members\n")
+		fmt.Printf("%sGFD: 0 members%s\n", red, reset)
 	} else if g.memberCount == 1 {
-		fmt.Printf("GFD: 1 member: %s\n", g.membership[0])
+		fmt.Printf("%sGFD: 1 member: %s%s\n", red, g.membership[0], reset)
 	} else {
 		memberList := strings.Join(g.membership, ", ")
-		fmt.Printf("GFD: %d members: %s\n", g.memberCount, memberList)
+		fmt.Printf("%sGFD: %d members: %s%s\n", red, g.memberCount, memberList, reset)
 	}
 }
