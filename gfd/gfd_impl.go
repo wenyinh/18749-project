@@ -27,17 +27,20 @@ type lfdInfo struct {
 }
 
 type gfd struct {
-	addr         string
-	membership   []string               // List of server IDs
-	memberCount  int
-	serverToLFD  map[string]string      // Map of server ID -> LFD ID
-	lfdInfos     map[string]*lfdInfo    // Map of LFD ID -> LFD info
-	hbFreq       time.Duration          // Heartbeat frequency for GFD->LFD
-	timeout      time.Duration          // Heartbeat timeout
-	mu           sync.Mutex
+	addr        string
+	membership  []string // List of server IDs
+	memberCount int
+	serverToLFD map[string]string   // Map of server ID -> LFD ID
+	lfdInfos    map[string]*lfdInfo // Map of LFD ID -> LFD info
+	hbFreq      time.Duration       // Heartbeat frequency for GFD->LFD
+	timeout     time.Duration       // Heartbeat timeout
+	mu          sync.Mutex
+
+	rmAddr string
+	rmConn net.Conn
 }
 
-func NewGFD(addr string, hbFreq, timeout time.Duration) GFD {
+func NewGFD(addr string, rmAddr string, hbFreq, timeout time.Duration) GFD {
 	return &gfd{
 		addr:        addr,
 		membership:  make([]string, 0),
@@ -46,6 +49,7 @@ func NewGFD(addr string, hbFreq, timeout time.Duration) GFD {
 		lfdInfos:    make(map[string]*lfdInfo),
 		hbFreq:      hbFreq,
 		timeout:     timeout,
+		rmAddr:      rmAddr,
 	}
 }
 
@@ -53,6 +57,12 @@ func (g *gfd) Run() error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 	listener := utils.MustListen(g.addr)
 	log.Printf("[GFD] listening on %s, heartbeat freq=%s, timeout=%s", g.addr, g.hbFreq, g.timeout)
+
+	if err := g.connectRM(); err != nil {
+		log.Printf("[GFD] WARNING: failed to connect RM at %s: %v", g.rmAddr, err)
+	} else {
+		g.notifyRM()
+	}
 
 	// Initial state
 	g.printMembership()
@@ -233,7 +243,6 @@ func (g *gfd) sendHeartbeatToLFD(info *lfdInfo) {
 // handleLFDFailure is called when LFD fails to respond to heartbeats
 func (g *gfd) handleLFDFailure(lfdID string, serverID string) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 
 	// Remove LFD from tracking
 	delete(g.lfdInfos, lfdID)
@@ -256,18 +265,26 @@ func (g *gfd) handleLFDFailure(lfdID string, serverID string) {
 
 		log.Printf("[GFD] removed server %s from membership due to LFD %s failure", serverID, lfdID)
 		g.printMembershipLocked()
+		g.mu.Unlock()
+
+		g.notifyRM()
+		return
 	}
+
+	g.mu.Unlock()
 }
 
 func (g *gfd) addReplica(serverID string, lfdID string) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 
 	// Check if server already exists in membership
 	for _, member := range g.membership {
 		if member == serverID {
 			log.Printf("[GFD] server %s already in membership (monitored by LFD %s)", serverID, lfdID)
 			g.serverToLFD[serverID] = lfdID
+			g.printMembershipLocked()
+			g.mu.Unlock()
+			g.notifyRM()
 			return
 		}
 	}
@@ -279,11 +296,13 @@ func (g *gfd) addReplica(serverID string, lfdID string) {
 
 	log.Printf("[GFD] added server %s to membership (monitored by LFD %s)", serverID, lfdID)
 	g.printMembershipLocked()
+	g.mu.Unlock()
+
+	g.notifyRM()
 }
 
 func (g *gfd) deleteReplica(serverID string, lfdID string) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 
 	// Find and remove server from membership
 	found := false
@@ -298,6 +317,7 @@ func (g *gfd) deleteReplica(serverID string, lfdID string) {
 
 	if !found {
 		log.Printf("[GFD] server %s not found in membership (DELETE request from LFD %s)", serverID, lfdID)
+		g.mu.Unlock()
 		return
 	}
 
@@ -307,6 +327,9 @@ func (g *gfd) deleteReplica(serverID string, lfdID string) {
 
 	log.Printf("[GFD] deleted server %s from membership (reported by LFD %s)", serverID, lfdID)
 	g.printMembershipLocked()
+	g.mu.Unlock()
+
+	g.notifyRM()
 }
 
 func (g *gfd) printMembership() {
@@ -325,5 +348,43 @@ func (g *gfd) printMembershipLocked() {
 	} else {
 		memberList := strings.Join(g.membership, ", ")
 		fmt.Printf("%sGFD: %d members: %s%s\n", red, g.memberCount, memberList, reset)
+	}
+}
+
+func (g *gfd) connectRM() error {
+	if g.rmAddr == "" {
+		return fmt.Errorf("rmAddr is empty")
+	}
+	conn, err := net.Dial("tcp", g.rmAddr)
+	if err != nil {
+		return err
+	}
+	g.mu.Lock()
+	g.rmConn = conn
+	g.mu.Unlock()
+	log.Printf("[GFD] connected to RM at %s", g.rmAddr)
+	return nil
+}
+
+func (g *gfd) notifyRM() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	if g.rmConn == nil {
+		return
+	}
+
+	var line string
+	if g.memberCount == 0 {
+		line = "MEMBERS"
+	} else {
+		memberList := strings.Join(g.membership, ",")
+		line = fmt.Sprintf("MEMBERS %s", memberList)
+	}
+
+	if err := utils.WriteLine(g.rmConn, line); err != nil {
+		log.Printf("[GFD] failed to notify RM (%q): %v", line, err)
+		_ = g.rmConn.Close()
+		g.rmConn = nil
 	}
 }
