@@ -8,7 +8,7 @@ import (
 	"github.com/wenyinh/18749-project/lfd"
 )
 
-// go run lrunner.go -target 127.0.0.1:9001 -gfd 172.26.1.83:8000
+// go run lrunner.go -target 127.0.0.1:9001 -gfd 172.26.1.83:8000 -id LFD1
 func main() {
 	targetAddr := flag.String("target", "127.0.0.1:9000", "server address to monitor")
 	hb := flag.Duration("hb", 1*time.Second, "heartbeat frequency (e.g. 1s, 500ms)")
