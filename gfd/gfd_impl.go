@@ -132,6 +132,7 @@ func (g *gfd) handleConnection(conn net.Conn) {
 
 		// Handle GFD_PONG (heartbeat response from LFD)
 		if command == "GFD_PONG" {
+			log.Printf("[GFD] received GFD_PONG from %s", lfdID)
 			g.mu.Lock()
 			if info != nil {
 				info.lastHB = time.Now()
@@ -233,6 +234,7 @@ func (g *gfd) sendHeartbeatToLFD(info *lfdInfo) {
 	// Send GFD_PING
 	if conn != nil {
 		err := utils.WriteLine(conn, gfdPing)
+		log.Printf("[GFD] heartbeat to %s", lfdID)
 		if err != nil {
 			log.Printf("[GFD] failed to send heartbeat to LFD %s: %v", lfdID, err)
 			g.handleLFDFailure(lfdID, serverID)

@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -62,7 +63,12 @@ type server struct {
 	BackupConns    map[string]net.Conn
 	CheckpointFreq time.Duration
 	CheckpointNo   int
-	mu             sync.Mutex
+
+	rmAddr string
+	rmConn net.Conn
+	rmMu   sync.Mutex
+
+	mu sync.Mutex
 }
 
 type MessageType struct {
@@ -76,6 +82,7 @@ func NewServer(
 	backups map[string]string,
 	backupConns map[string]net.Conn,
 	ckptFreq time.Duration,
+	rmAddr string,
 ) Server {
 	if backups == nil {
 		backups = make(map[string]string)
@@ -92,8 +99,40 @@ func NewServer(
 		BackupConns:    backupConns,
 		CheckpointFreq: ckptFreq,
 		CheckpointNo:   0,
+		rmAddr:         rmAddr,
 	}
 	return s
+}
+
+func (s *server) notifyStateToRM() {
+	if s.rmAddr == "" {
+		return
+	}
+
+	s.rmMu.Lock()
+	conn := s.rmConn
+	s.rmMu.Unlock()
+	if conn == nil {
+		return
+	}
+
+	s.mu.Lock()
+	state := s.ServerState
+	sid := s.ReplicaId
+	s.mu.Unlock()
+
+	line := fmt.Sprintf("STATE %s %d", sid, state)
+	if err := utils.WriteLine(conn, line); err != nil {
+		log.Printf("[SERVER][%s] failed to send STATE to RM: %v", s.ReplicaId, err)
+		s.rmMu.Lock()
+		if s.rmConn == conn {
+			_ = conn.Close()
+			s.rmConn = nil
+		}
+		s.rmMu.Unlock()
+	} else {
+		log.Printf("[SERVER][%s] reported state=%d to RM", s.ReplicaId, state)
+	}
 }
 
 func (s *server) handleConnection(conn net.Conn) {
@@ -114,20 +153,17 @@ func (s *server) handleConnection(conn net.Conn) {
 			return
 		}
 
-		// Check if this is a REGISTER message from LFD
 		if len(line) >= len(Register) && line[:len(Register)] == Register {
 			parts := strings.Fields(line)
 			if len(parts) == 2 {
 				requestedServerID := parts[1]
 				if requestedServerID == s.ReplicaId {
-					// Server ID matches, acknowledge
 					err := utils.WriteLine(conn, Ack)
 					if err == nil {
 						isLFDConnection = true
 						log.Printf("[SERVER][%s] LFD registered successfully to monitor this server", s.ReplicaId)
 					}
 				} else {
-					// Server ID mismatch, reject
 					err := utils.WriteLine(conn, Nack)
 					log.Printf("[SERVER][%s] rejected LFD registration: expected %s but got %s",
 						s.ReplicaId, s.ReplicaId, requestedServerID)
@@ -162,22 +198,21 @@ func (s *server) handleConnection(conn net.Conn) {
 				_ = utils.WriteLine(conn, "ERROR: invalid JSON format")
 				continue
 			}
-			if s.ServerRole == Backup {
-				log.Printf("[SERVER][%s] is not primary server, skip handle request: client=%s, req_num=%d",
-					s.ReplicaId, reqMsg.ClientID, reqMsg.RequestNum)
-				continue
-			}
 			log.Printf("[SERVER][%s] received JSON request from client, clientId: %s, request_num: %d, Message: %s",
 				s.ReplicaId, reqMsg.ClientID, reqMsg.RequestNum, reqMsg.Message)
+
 			s.mu.Lock()
 			replicaId := s.ReplicaId
 			before := s.ServerState
 			s.ServerState++
 			after := s.ServerState
 			s.mu.Unlock()
+
 			log.Printf("[SERVER][%s] server state before: %d", replicaId, before)
 			log.Printf("[SERVER][%s] server state after: %d", replicaId, after)
-			// Create JSON response
+
+			s.notifyStateToRM()
+
 			respMsg := ResponseMessage{
 				Type:        Resp,
 				ServerID:    replicaId,
@@ -195,26 +230,38 @@ func (s *server) handleConnection(conn net.Conn) {
 			_ = utils.WriteLine(conn, string(jsonResp))
 			log.Printf("[SERVER][%s] sent JSON reply to client, clientId: %s, request_num: %d, server state: %d",
 				s.ReplicaId, reqMsg.ClientID, reqMsg.RequestNum, s.ServerState)
+
 		case Checkpoint:
 			var ckpt CheckpointMessage
 			if err := json.Unmarshal([]byte(line), &ckpt); err != nil {
 				log.Printf("[SERVER][%s] bad CHECKPOINT json: %v", s.ReplicaId, err)
 				continue
 			}
-			if s.ServerRole == Backup {
-				s.mu.Lock()
+			s.mu.Lock()
+			role := s.ServerRole
+			if role == Backup {
 				if ckpt.CheckpointNum <= s.CheckpointNo {
+					oldNo := s.CheckpointNo
 					s.mu.Unlock()
 					log.Printf("[SERVER][%s] ignore stale checkpoint from %s: recv=%d <= local=%d",
-						s.ReplicaId, ckpt.ReplicaId, ckpt.CheckpointNum, s.CheckpointNo)
+						s.ReplicaId, ckpt.ReplicaId, ckpt.CheckpointNum, oldNo)
 					continue
 				}
 				s.ServerState = ckpt.ServerState
 				s.CheckpointNo = ckpt.CheckpointNum
+				newState := s.ServerState
+				newNo := s.CheckpointNo
 				s.mu.Unlock()
-				log.Printf("[SERVER][%s] recv checkpoint from %s: server_state=%d, checkpoint_no=%d",
-					s.ReplicaId, ckpt.ReplicaId, s.ServerState, s.CheckpointNo)
+
+				log.Printf("\033[34m[SERVER][%s] recv checkpoint from %s: server_state=%d, checkpoint_no=%d\033[0m",
+					s.ReplicaId, ckpt.ReplicaId, newState, newNo)
+
+				s.notifyStateToRM()
+			} else {
+				s.mu.Unlock()
+				log.Printf("[SERVER][%s] received CHECKPOINT while in PRIMARY role, ignoring", s.ReplicaId)
 			}
+
 		default:
 			_ = utils.WriteLine(conn, "ERROR: unknown request type")
 		}
@@ -222,20 +269,27 @@ func (s *server) handleConnection(conn net.Conn) {
 }
 
 func (s *server) dialBackups() {
-	if s.ServerRole != Primary {
+	s.mu.Lock()
+	role := s.ServerRole
+	backups := s.Backups
+	existing := s.BackupConns
+	s.mu.Unlock()
+
+	if role != Primary {
 		return
 	}
+
 	type target struct {
 		id, addr string
 	}
 	var todo []target
-	s.mu.Lock()
-	for bid, baddr := range s.Backups {
-		if _, ok := s.BackupConns[bid]; !ok {
+
+	for bid, baddr := range backups {
+		if _, ok := existing[bid]; !ok {
 			todo = append(todo, target{id: bid, addr: baddr})
 		}
 	}
-	s.mu.Unlock()
+
 	for _, t := range todo {
 		conn, err := net.Dial("tcp", t.addr)
 		if err != nil {
@@ -255,10 +309,11 @@ func (s *server) dialBackups() {
 }
 
 func (s *server) sendCheckpoint() {
+	s.mu.Lock()
 	if s.ServerRole != Primary {
+		s.mu.Unlock()
 		return
 	}
-	s.mu.Lock()
 	ckpt := CheckpointMessage{
 		Type:          Checkpoint,
 		ReplicaId:     s.ReplicaId,
@@ -292,15 +347,85 @@ func (s *server) sendCheckpoint() {
 			}
 			s.mu.Unlock()
 		} else {
-			log.Printf("[SERVER][%s] checkpoint #%d sent to %s (server_state=%d)",
+			log.Printf("\033[34m[SERVER][%s] checkpoint #%d sent to %s (server_state=%d)\033[0m",
 				s.ReplicaId, ckpt.CheckpointNum, bid, ckpt.ServerState)
+		}
+	}
+}
+
+func (s *server) connectRM() {
+	if s.rmAddr == "" {
+		return
+	}
+	conn, err := net.Dial("tcp", s.rmAddr)
+	if err != nil {
+		log.Printf("[SERVER][%s] failed to connect RM %s: %v", s.ReplicaId, s.rmAddr, err)
+		return
+	}
+	s.rmMu.Lock()
+	s.rmConn = conn
+	s.rmMu.Unlock()
+
+	hello := fmt.Sprintf("HELLO_SERVER %s", s.ReplicaId)
+	if err := utils.WriteLine(conn, hello); err != nil {
+		log.Printf("[SERVER][%s] failed to send HELLO_SERVER to RM: %v", s.ReplicaId, err)
+		_ = conn.Close()
+		s.rmMu.Lock()
+		s.rmConn = nil
+		s.rmMu.Unlock()
+		return
+	}
+
+	log.Printf("[SERVER][%s] connected to RM %s", s.ReplicaId, s.rmAddr)
+
+	reader := bufio.NewReader(conn)
+	for {
+		line, err := utils.ReadLine(reader)
+		if err != nil {
+			log.Printf("[SERVER][%s] RM connection closed: %v", s.ReplicaId, err)
+			s.rmMu.Lock()
+			if s.rmConn == conn {
+				s.rmConn = nil
+			}
+			s.rmMu.Unlock()
+			_ = conn.Close()
+			return
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		if strings.ToUpper(parts[0]) != "ROLE" {
+			continue
+		}
+		roleStr := strings.ToUpper(parts[1])
+
+		s.mu.Lock()
+		old := s.ServerRole
+		if roleStr == "PRIMARY" {
+			s.ServerRole = Primary
+		} else {
+			s.ServerRole = Backup
+		}
+		newRole := s.ServerRole
+		s.mu.Unlock()
+
+		if old != newRole {
+			log.Printf("[SERVER][%s] role changed by RM: %v -> %v", s.ReplicaId, old, newRole)
+		} else {
+			log.Printf("[SERVER][%s] role confirmed by RM: %v", s.ReplicaId, newRole)
 		}
 	}
 }
 
 func (s *server) Run() error {
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	if s.ServerRole == Primary && s.CheckpointFreq > 0 {
+
+	if s.CheckpointFreq > 0 {
 		go func() {
 			t := time.NewTicker(s.CheckpointFreq)
 			defer t.Stop()
@@ -310,6 +435,11 @@ func (s *server) Run() error {
 			}
 		}()
 	}
+
+	if s.rmAddr != "" {
+		go s.connectRM()
+	}
+
 	listener := utils.MustListen(s.Addr)
 	log.Printf("[SERVER][%s] listening on %s", s.ReplicaId, s.Addr)
 	for {

@@ -10,33 +10,31 @@ import (
 	"github.com/wenyinh/18749-project/client"
 )
 
+// go run crunner.go -servers "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003" -id C1 -auto -primary S1 -rm 127.0.0.1:8001
 func main() {
 	servers := flag.String("servers", "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003", "server addresses (format: ID1=addr1,ID2=addr2,...)")
 	clientID := flag.String("id", "C1", "client identifier")
 	interval := flag.Duration("interval", 3*time.Second, "interval between requests")
 	autoSend := flag.Bool("auto", false, "automatically send requests")
-	primary := flag.String("primary", "S1", "primary replica id")
+	primary := flag.String("primary", "", "initial primary replica id (optional, RM will override)")
+	rmAddr := flag.String("rm", "127.0.0.1:8001", "RM address")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
 
-	// Parse server addresses
 	serverAddrs := parseServerAddrs(*servers)
 	if len(serverAddrs) == 0 {
 		log.Fatal("No server addresses provided")
 	}
 
-	// Create client
-	c := client.NewClient(*clientID, serverAddrs, *primary)
+	c := client.NewClient(*clientID, serverAddrs, *primary, *rmAddr)
 
-	// Connect
 	if err := c.Connect(); err != nil {
 		log.Fatalf("Failed to connect to servers: %v", err)
 	}
 	defer c.Close()
 
 	if *autoSend {
-		// Auto mode: continuously send requests
 		log.Printf("[%s] Starting auto-send mode (interval: %v)", *clientID, *interval)
 		reqNum := 0
 		for {
@@ -46,7 +44,6 @@ func main() {
 			time.Sleep(*interval)
 		}
 	} else {
-		// Manual mode: wait for user input
 		fmt.Printf("Client %s connected. Commands:\n", *clientID)
 		fmt.Println("  Type messages and press Enter to send")
 		fmt.Println("  'quit' to exit")
