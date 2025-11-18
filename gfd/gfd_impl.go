@@ -27,14 +27,14 @@ type lfdInfo struct {
 }
 
 type gfd struct {
-	addr         string
-	membership   []string               // List of server IDs
-	memberCount  int
-	serverToLFD  map[string]string      // Map of server ID -> LFD ID
-	lfdInfos     map[string]*lfdInfo    // Map of LFD ID -> LFD info
-	hbFreq       time.Duration          // Heartbeat frequency for GFD->LFD
-	timeout      time.Duration          // Heartbeat timeout
-	mu           sync.Mutex
+	addr        string
+	membership  []string // List of server IDs
+	memberCount int
+	serverToLFD map[string]string   // Map of server ID -> LFD ID
+	lfdInfos    map[string]*lfdInfo // Map of LFD ID -> LFD info
+	hbFreq      time.Duration       // Heartbeat frequency for GFD->LFD
+	timeout     time.Duration       // Heartbeat timeout
+	mu          sync.Mutex
 }
 
 func NewGFD(addr string, hbFreq, timeout time.Duration) GFD {
@@ -122,6 +122,7 @@ func (g *gfd) handleConnection(conn net.Conn) {
 
 		// Handle GFD_PONG (heartbeat response from LFD)
 		if command == "GFD_PONG" {
+			log.Printf("[GFD] received GFD_PONG from %s", lfdID)
 			g.mu.Lock()
 			if info != nil {
 				info.lastHB = time.Now()
@@ -223,6 +224,7 @@ func (g *gfd) sendHeartbeatToLFD(info *lfdInfo) {
 	// Send GFD_PING
 	if conn != nil {
 		err := utils.WriteLine(conn, gfdPing)
+		log.Printf("[GFD] heartbeat to %s", lfdID)
 		if err != nil {
 			log.Printf("[GFD] failed to send heartbeat to LFD %s: %v", lfdID, err)
 			g.handleLFDFailure(lfdID, serverID)

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 
 	"github.com/wenyinh/18749-project/utils"
 )
@@ -21,10 +22,11 @@ const (
 )
 
 type RequestMessage struct {
-	Type       string `json:"type"`
-	ClientID   string `json:"client_id"`
-	RequestNum int    `json:"request_num"`
-	Message    string `json:"message"`
+	Type        string `json:"type"`
+	ClientID    string `json:"client_id"`
+	RequestNum  int    `json:"request_num"`
+	Message     string `json:"message"`
+	GlobalState int    `json:"global_state"`
 }
 
 type ResponseMessage struct {
@@ -37,13 +39,19 @@ type ResponseMessage struct {
 }
 
 type server struct {
-	Addr        string
-	ReplicaId   string
+	Addr      string
+	ReplicaId string
+
+	mu          sync.Mutex
 	ServerState int
 }
 
 func NewServer(addr, replicaId string, serverState int) Server {
-	return &server{addr, replicaId, serverState}
+	return &server{
+		Addr:        addr,
+		ReplicaId:   replicaId,
+		ServerState: serverState,
+	}
 }
 
 func (s *server) handleConnection(conn net.Conn) {
@@ -64,20 +72,17 @@ func (s *server) handleConnection(conn net.Conn) {
 			return
 		}
 
-		// Check if this is a REGISTER message from LFD
 		if len(line) >= len(Register) && line[:len(Register)] == Register {
 			parts := strings.Fields(line)
 			if len(parts) == 2 {
 				requestedServerID := parts[1]
 				if requestedServerID == s.ReplicaId {
-					// Server ID matches, acknowledge
 					err := utils.WriteLine(conn, Ack)
 					if err == nil {
 						isLFDConnection = true
 						log.Printf("[SERVER][%s] LFD registered successfully to monitor this server", s.ReplicaId)
 					}
 				} else {
-					// Server ID mismatch, reject
 					err := utils.WriteLine(conn, Nack)
 					log.Printf("[SERVER][%s] rejected LFD registration: expected %s but got %s",
 						s.ReplicaId, s.ReplicaId, requestedServerID)
@@ -94,46 +99,57 @@ func (s *server) handleConnection(conn net.Conn) {
 			if err == nil {
 				log.Printf("[SERVER][%s] heartbeat, sent pong to LFD", s.ReplicaId)
 			}
-		} else {
-			// Try to parse as JSON message
-			var reqMsg RequestMessage
-			if err := json.Unmarshal([]byte(line), &reqMsg); err != nil {
-				log.Printf("[SERVER][%s] failed to parse JSON: %v", s.ReplicaId, err)
-				_ = utils.WriteLine(conn, "ERROR: invalid JSON format")
-				continue
-			}
-
-			if reqMsg.Type == Req {
-				log.Printf("[SERVER][%s] received JSON request from client, clientId: %s, request_num: %d, Message: %s",
-					s.ReplicaId, reqMsg.ClientID, reqMsg.RequestNum, reqMsg.Message)
-				log.Printf("[SERVER][%s] server state before: %d", s.ReplicaId, s.ServerState)
-				s.ServerState++
-				log.Printf("[SERVER][%s] server state after: %d", s.ReplicaId, s.ServerState)
-
-				// Create JSON response
-				respMsg := ResponseMessage{
-					Type:        Resp,
-					ServerID:    s.ReplicaId,
-					ClientID:    reqMsg.ClientID,
-					RequestNum:  reqMsg.RequestNum,
-					ServerState: s.ServerState,
-					Message:     reqMsg.Message,
-				}
-
-				jsonResp, err := json.Marshal(respMsg)
-				if err != nil {
-					log.Printf("[SERVER][%s] error marshaling response: %v", s.ReplicaId, err)
-					_ = utils.WriteLine(conn, "ERROR: failed to create response")
-					continue
-				}
-
-				_ = utils.WriteLine(conn, string(jsonResp))
-				log.Printf("[SERVER][%s] sent JSON reply to client, clientId: %s, request_num: %d, server state: %d",
-					s.ReplicaId, reqMsg.ClientID, reqMsg.RequestNum, s.ServerState)
-			} else {
-				_ = utils.WriteLine(conn, "ERROR: unknown request type")
-			}
+			continue
 		}
+
+		var reqMsg RequestMessage
+		if err := json.Unmarshal([]byte(line), &reqMsg); err != nil {
+			log.Printf("[SERVER][%s] failed to parse JSON: %v", s.ReplicaId, err)
+			_ = utils.WriteLine(conn, "ERROR: invalid JSON format")
+			continue
+		}
+
+		if reqMsg.Type != Req {
+			_ = utils.WriteLine(conn, "ERROR: unknown request type")
+			continue
+		}
+
+		s.mu.Lock()
+		before := s.ServerState
+
+		if reqMsg.GlobalState > s.ServerState {
+			log.Printf("[SERVER][%s] sync state from %d -> %d (client global_state)",
+				s.ReplicaId, s.ServerState, reqMsg.GlobalState)
+			s.ServerState = reqMsg.GlobalState
+		}
+
+		s.ServerState++
+		after := s.ServerState
+		s.mu.Unlock()
+
+		log.Printf("[SERVER][%s] received JSON request from client, clientId=%s, request_num=%d, Message=%s",
+			s.ReplicaId, reqMsg.ClientID, reqMsg.RequestNum, reqMsg.Message)
+		log.Printf("[SERVER][%s] server state before: %d", s.ReplicaId, before)
+		log.Printf("[SERVER][%s] server state after: %d", s.ReplicaId, after)
+
+		respMsg := ResponseMessage{
+			Type:        Resp,
+			ServerID:    s.ReplicaId,
+			ClientID:    reqMsg.ClientID,
+			RequestNum:  reqMsg.RequestNum,
+			ServerState: after,
+			Message:     reqMsg.Message,
+		}
+		jsonResp, err := json.Marshal(respMsg)
+		if err != nil {
+			log.Printf("[SERVER][%s] error marshaling response: %v", s.ReplicaId, err)
+			_ = utils.WriteLine(conn, "ERROR: failed to create response")
+			continue
+		}
+
+		_ = utils.WriteLine(conn, string(jsonResp))
+		log.Printf("[SERVER][%s] sent JSON reply to client, clientId=%s, request_num=%d, server state=%d",
+			s.ReplicaId, reqMsg.ClientID, reqMsg.RequestNum, after)
 	}
 }
 

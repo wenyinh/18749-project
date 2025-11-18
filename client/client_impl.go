@@ -13,10 +13,11 @@ import (
 )
 
 type RequestMessage struct {
-	Type       string `json:"type"`
-	ClientID   string `json:"client_id"`
-	RequestNum int    `json:"request_num"`
-	Message    string `json:"message"`
+	Type        string `json:"type"`
+	ClientID    string `json:"client_id"`
+	RequestNum  int    `json:"request_num"`
+	Message     string `json:"message"`
+	GlobalState int    `json:"global_state"`
 }
 
 type ResponseMessage struct {
@@ -28,34 +29,33 @@ type ResponseMessage struct {
 	Message     string `json:"message"`
 }
 
-type QueuedRequest struct {
-	RequestNum int
-	Message    string
-	Timestamp  time.Time
-}
-
 type ReplicaConnection struct {
-	ServerID        string
-	Addr            string
-	Conn            net.Conn
-	IsHealthy       bool
-	Queue           []QueuedRequest
+	ServerID string
+	Addr     string
+
+	Conn      net.Conn
+	IsHealthy bool
+	reader    *bufio.Reader
+
 	mu              sync.Mutex
-	reader          *bufio.Reader
-	reconnecting    bool // Flag to prevent multiple reconnection attempts
-	permanentlyDown bool // Flag to mark replica as permanently unreachable
+	reconnecting    bool
+	permanentlyDown bool
 }
 
 type client struct {
-	clientID       string
-	replicas       []*ReplicaConnection
+	clientID string
+
+	replicas []*ReplicaConnection
+
 	requestNum     int
-	maxQueueSize   int
 	maxRetries     int
 	baseDelay      time.Duration
 	mu             sync.Mutex
-	pendingReplies map[int]bool // Track which requests have been delivered
+	pendingReplies map[int]bool
 	replyMu        sync.Mutex
+
+	globalState int
+	gsMu        sync.Mutex
 }
 
 func NewClient(clientID string, serverAddrs map[string]string) Client {
@@ -65,7 +65,6 @@ func NewClient(clientID string, serverAddrs map[string]string) Client {
 			ServerID:  serverID,
 			Addr:      addr,
 			IsHealthy: false,
-			Queue:     make([]QueuedRequest, 0),
 		})
 	}
 
@@ -73,30 +72,42 @@ func NewClient(clientID string, serverAddrs map[string]string) Client {
 		clientID:       clientID,
 		replicas:       replicas,
 		requestNum:     0,
-		maxQueueSize:   100,
 		maxRetries:     5,
 		baseDelay:      time.Second,
 		pendingReplies: make(map[int]bool),
 	}
 }
 
+func (c *client) getGlobalState() int {
+	c.gsMu.Lock()
+	defer c.gsMu.Unlock()
+	return c.globalState
+}
+
+func (c *client) updateGlobalState(v int) {
+	c.gsMu.Lock()
+	if v > c.globalState {
+		c.globalState = v
+	}
+	c.gsMu.Unlock()
+}
+
 func (c *client) Connect() error {
 	log.Printf("[%s] Connecting to all replicas...", c.clientID)
 
 	var wg sync.WaitGroup
-	errors := make([]error, len(c.replicas))
+	errs := make([]error, len(c.replicas))
 
 	for i, replica := range c.replicas {
 		wg.Add(1)
 		go func(idx int, r *ReplicaConnection) {
 			defer wg.Done()
 			err := c.connectReplica(r)
-			errors[idx] = err
+			errs[idx] = err
 			if err == nil {
 				log.Printf("[%s→%s] Connected successfully", c.clientID, r.ServerID)
 			} else {
 				log.Printf("[%s→%s] Initial connection failed: %v", c.clientID, r.ServerID, err)
-				// Start background reconnection
 				go c.attemptReconnect(r)
 			}
 		}(i, replica)
@@ -104,49 +115,47 @@ func (c *client) Connect() error {
 
 	wg.Wait()
 
-	// Check if at least one replica is connected
-	hasConnection := false
-	for _, replica := range c.replicas {
-		if replica.IsHealthy {
-			hasConnection = true
+	has := false
+	for _, r := range c.replicas {
+		r.mu.Lock()
+		ok := r.IsHealthy
+		r.mu.Unlock()
+		if ok {
+			has = true
 			break
 		}
 	}
-
-	if !hasConnection {
+	if !has {
 		return fmt.Errorf("failed to connect to any replica")
 	}
-
 	return nil
 }
 
-func (c *client) connectReplica(replica *ReplicaConnection) error {
-	replica.mu.Lock()
-	defer replica.mu.Unlock()
+func (c *client) connectReplica(r *ReplicaConnection) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	conn, err := net.Dial("tcp", replica.Addr)
+	conn, err := net.Dial("tcp", r.Addr)
 	if err != nil {
 		return err
 	}
-
-	replica.Conn = conn
-	replica.reader = bufio.NewReader(conn)
-	replica.IsHealthy = true
-	replica.permanentlyDown = false
+	r.Conn = conn
+	r.reader = bufio.NewReader(conn)
+	r.IsHealthy = true
 	return nil
 }
 
 func (c *client) activeReplicas() []*ReplicaConnection {
-	targets := make([]*ReplicaConnection, 0, len(c.replicas))
+	result := make([]*ReplicaConnection, 0, len(c.replicas))
 	for _, r := range c.replicas {
 		r.mu.Lock()
 		down := r.permanentlyDown
 		r.mu.Unlock()
 		if !down {
-			targets = append(targets, r)
+			result = append(result, r)
 		}
 	}
-	return targets
+	return result
 }
 
 func (c *client) SendMessage(message string) {
@@ -155,42 +164,37 @@ func (c *client) SendMessage(message string) {
 	reqNum := c.requestNum
 	c.mu.Unlock()
 
-	req := QueuedRequest{
-		RequestNum: reqNum,
-		Message:    message,
-		Timestamp:  time.Now(),
-	}
-
 	targets := c.activeReplicas()
 	if len(targets) == 0 {
-		log.Printf("[%s] No active replicas (all permanently down). Drop request_num=%d", c.clientID, reqNum)
+		log.Printf("[%s] No active replicas (all permanently down). Drop request_num=%d",
+			c.clientID, reqNum)
 		return
 	}
 
-	log.Printf("[%s] Sending request_num=%d to %d replicas", c.clientID, reqNum, len(targets))
+	log.Printf("[%s] Sending request_num=%d to %d replicas (global_state=%d)",
+		c.clientID, reqNum, len(targets), c.getGlobalState())
 
-	// Channel to collect responses
 	responseChan := make(chan ResponseMessage, len(targets))
 	var wg sync.WaitGroup
 
-	// Send to all replicas
-	for _, replica := range targets {
+	for _, r := range targets {
 		wg.Add(1)
-		go func(r *ReplicaConnection) {
+		go func(rep *ReplicaConnection) {
 			defer wg.Done()
-			c.sendToReplica(r, req, responseChan)
-		}(replica)
+			c.sendToReplica(rep, reqNum, message, responseChan)
+		}(r)
 	}
 
-	// Wait for responses in a separate goroutine
 	go func() {
 		wg.Wait()
 		close(responseChan)
 	}()
 
-	// Process responses
 	firstReply := true
 	for resp := range responseChan {
+		// 所有响应都用来更新 global_state
+		c.updateGlobalState(resp.ServerState)
+
 		c.replyMu.Lock()
 		if firstReply {
 			firstReply = false
@@ -200,208 +204,134 @@ func (c *client) SendMessage(message string) {
 				c.clientID, resp.ServerID, resp.RequestNum, resp.ServerState)
 		} else {
 			c.replyMu.Unlock()
-			log.Printf("[%s←%s] request_num %d: Discarded duplicate reply from %s",
-				c.clientID, resp.ServerID, resp.RequestNum, resp.ServerID)
+			log.Printf(
+				"[%s←%s] request_num=%d: Discard duplicate reply from %s (state=%d)",
+				c.clientID,
+				resp.ServerID,
+				resp.RequestNum,
+				resp.ServerID,
+				resp.ServerState,
+			)
 		}
 	}
 }
 
-func (c *client) sendToReplica(replica *ReplicaConnection, req QueuedRequest, responseChan chan ResponseMessage) {
-	replica.mu.Lock()
-
-	// Check if replica is permanently down - skip it entirely
-	if replica.permanentlyDown {
-		replica.mu.Unlock()
-		log.Printf("[%s→%s] Replica permanently down, skipping request_num=%d",
-			c.clientID, replica.ServerID, req.RequestNum)
+func (c *client) sendToReplica(r *ReplicaConnection, reqNum int, msg string, ch chan<- ResponseMessage) {
+	r.mu.Lock()
+	if r.permanentlyDown {
+		r.mu.Unlock()
+		log.Printf("[%s→%s] Replica permanently down, skip request_num=%d",
+			c.clientID, r.ServerID, reqNum)
 		return
 	}
-
-	if !replica.IsHealthy || replica.Conn == nil {
-		// Queue the request (already holding lock, so call internal version)
-		c.enqueueRequestLocked(replica, req)
-		queueSize := len(replica.Queue)
-		permDown := replica.permanentlyDown
-		replica.mu.Unlock()
-		if permDown {
-			return
-		}
-		log.Printf("[%s→%s] Connection down, queued request_num=%d (queue size: %d)",
-			c.clientID, replica.ServerID, req.RequestNum, queueSize)
-		go c.attemptReconnect(replica)
+	if !r.IsHealthy || r.Conn == nil {
+		r.mu.Unlock()
+		log.Printf("[%s→%s] Connection down, skip request_num=%d and try reconnect",
+			c.clientID, r.ServerID, reqNum)
+		go c.attemptReconnect(r)
 		return
 	}
+	conn := r.Conn
+	reader := r.reader
+	r.mu.Unlock()
 
-	conn := replica.Conn
-	reader := replica.reader
-	replica.mu.Unlock()
-
-	// Construct JSON request
-	reqMsg := RequestMessage{
-		Type:       "REQ",
-		ClientID:   c.clientID,
-		RequestNum: req.RequestNum,
-		Message:    req.Message,
+	req := RequestMessage{
+		Type:        "REQ",
+		ClientID:    c.clientID,
+		RequestNum:  reqNum,
+		Message:     msg,
+		GlobalState: c.getGlobalState(),
 	}
 
-	jsonData, err := json.Marshal(reqMsg)
+	data, err := json.Marshal(req)
 	if err != nil {
-		log.Printf("[%s→%s] Error marshaling JSON: %v", c.clientID, replica.ServerID, err)
+		log.Printf("[%s→%s] Error marshaling JSON: %v", c.clientID, r.ServerID, err)
 		return
 	}
 
-	log.Printf("[%s→%s] Sending request_num=%d", c.clientID, replica.ServerID, req.RequestNum)
+	log.Printf("[%s→%s] Sending request_num=%d (global_state=%d)",
+		c.clientID, r.ServerID, reqNum, req.GlobalState)
 
-	// Send request
-	err = utils.WriteLine(conn, string(jsonData))
+	if err := utils.WriteLine(conn, string(data)); err != nil {
+		log.Printf("[%s→%s] Error sending request: %v", c.clientID, r.ServerID, err)
+		c.markUnhealthy(r)
+		go c.attemptReconnect(r)
+		return
+	}
+
+	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	line, err := utils.ReadLine(reader)
 	if err != nil {
-		log.Printf("[%s→%s] Error sending request: %v", c.clientID, replica.ServerID, err)
-		c.markUnhealthy(replica)
-		c.enqueueRequest(replica, req)
-		go c.attemptReconnect(replica)
+		log.Printf("[%s→%s] Error receiving reply: %v", c.clientID, r.ServerID, err)
+		c.markUnhealthy(r)
+		go c.attemptReconnect(r)
 		return
 	}
 
-	// Receive response with timeout
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	reply, err := utils.ReadLine(reader)
-	if err != nil {
-		log.Printf("[%s→%s] Error receiving reply: %v", c.clientID, replica.ServerID, err)
-		c.markUnhealthy(replica)
-		c.enqueueRequest(replica, req)
-		go c.attemptReconnect(replica)
+	var resp ResponseMessage
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		log.Printf("[%s→%s] Failed to parse response: %v", c.clientID, r.ServerID, err)
 		return
 	}
 
-	// Parse JSON response
-	var respMsg ResponseMessage
-	if err := json.Unmarshal([]byte(reply), &respMsg); err == nil {
-		responseChan <- respMsg
-	} else {
-		log.Printf("[%s→%s] Failed to parse response: %v", c.clientID, replica.ServerID, err)
+	ch <- resp
+}
+
+func (c *client) markUnhealthy(r *ReplicaConnection) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.IsHealthy = false
+	if r.Conn != nil {
+		_ = r.Conn.Close()
+		r.Conn = nil
+		r.reader = nil
 	}
 }
 
-func (c *client) enqueueRequest(replica *ReplicaConnection, req QueuedRequest) {
-	replica.mu.Lock()
-	defer replica.mu.Unlock()
-	if replica.permanentlyDown {
-		log.Printf("[%s→%s] Permanently down; drop queued request_num=%d",
-			c.clientID, replica.ServerID, req.RequestNum)
+func (c *client) attemptReconnect(r *ReplicaConnection) {
+	r.mu.Lock()
+	if r.permanentlyDown {
+		r.mu.Unlock()
 		return
 	}
-	c.enqueueRequestLocked(replica, req)
-}
-
-// enqueueRequestLocked adds a request to the queue without acquiring the lock
-// Caller must hold replica.mu.Lock()
-func (c *client) enqueueRequestLocked(replica *ReplicaConnection, req QueuedRequest) {
-	if len(replica.Queue) >= c.maxQueueSize {
-		log.Printf("[%s→%s] Queue full (%d), dropping oldest request",
-			c.clientID, replica.ServerID, c.maxQueueSize)
-		replica.Queue = replica.Queue[1:]
-	}
-
-	replica.Queue = append(replica.Queue, req)
-}
-
-func (c *client) markUnhealthy(replica *ReplicaConnection) {
-	replica.mu.Lock()
-	defer replica.mu.Unlock()
-
-	replica.IsHealthy = false
-	if replica.Conn != nil {
-		replica.Conn.Close()
-		replica.Conn = nil
-		replica.reader = nil
-	}
-}
-
-func (c *client) attemptReconnect(replica *ReplicaConnection) {
-	// Check if already healthy or another goroutine is reconnecting
-	replica.mu.Lock()
-	if replica.permanentlyDown {
-		replica.mu.Unlock()
+	if r.IsHealthy {
+		r.mu.Unlock()
 		return
 	}
-	if replica.IsHealthy {
-		replica.mu.Unlock()
+	if r.reconnecting {
+		r.mu.Unlock()
 		return
 	}
-	if replica.reconnecting {
-		// Another goroutine is already trying to reconnect
-		replica.mu.Unlock()
-		return
-	}
-	// Mark as reconnecting to prevent multiple concurrent attempts
-	replica.reconnecting = true
-	replica.mu.Unlock()
+	r.reconnecting = true
+	r.mu.Unlock()
 
-	// Ensure we clear the reconnecting flag when done
 	defer func() {
-		replica.mu.Lock()
-		replica.reconnecting = false
-		replica.mu.Unlock()
+		r.mu.Lock()
+		r.reconnecting = false
+		r.mu.Unlock()
 	}()
 
 	for attempt := 0; attempt < c.maxRetries; attempt++ {
-		replica.mu.Lock()
-		if replica.permanentlyDown {
-			replica.mu.Unlock()
+		r.mu.Lock()
+		if r.permanentlyDown {
+			r.mu.Unlock()
 			return
 		}
-		replica.mu.Unlock()
+		r.mu.Unlock()
 
 		delay := c.calculateBackoffDelay(attempt)
 		log.Printf("[%s→%s] Reconnecting in %v (attempt %d/%d)...",
-			c.clientID, replica.ServerID, delay, attempt+1, c.maxRetries)
+			c.clientID, r.ServerID, delay, attempt+1, c.maxRetries)
 		time.Sleep(delay)
 
-		err := c.connectReplica(replica)
-		if err == nil {
-			replica.mu.Lock()
-			queueSize := len(replica.Queue)
-			replica.mu.Unlock()
-
-			log.Printf("[%s→%s] Reconnected successfully, flushing %d queued requests",
-				c.clientID, replica.ServerID, queueSize)
-			c.flushQueue(replica)
+		if err := c.connectReplica(r); err == nil {
+			log.Printf("[%s→%s] Reconnected successfully", c.clientID, r.ServerID)
 			return
 		}
-
-		log.Printf("[%s→%s] Reconnection attempt %d failed: %v",
-			c.clientID, replica.ServerID, attempt+1, err)
 	}
 
-	log.Printf("[%s→%s] Reconnection failed after %d attempts, replica marked as permanently down",
-		c.clientID, replica.ServerID, c.maxRetries)
-
-	// Mark replica as permanently down so future requests skip it
-	replica.mu.Lock()
-	replica.permanentlyDown = true
-	replica.mu.Unlock()
-}
-
-func (c *client) flushQueue(replica *ReplicaConnection) {
-	replica.mu.Lock()
-	queue := make([]QueuedRequest, len(replica.Queue))
-	copy(queue, replica.Queue)
-	replica.Queue = make([]QueuedRequest, 0)
-	replica.mu.Unlock()
-
-	for _, req := range queue {
-		log.Printf("[%s→%s] Sending queued request_num=%d (queued for %v)",
-			c.clientID, replica.ServerID, req.RequestNum, time.Since(req.Timestamp))
-
-		// Create a dummy response channel (we don't wait for responses during flush)
-		responseChan := make(chan ResponseMessage, 1)
-		c.sendToReplica(replica, req, responseChan)
-		close(responseChan)
-
-		// Drain the channel
-		for range responseChan {
-		}
-	}
+	log.Printf("[%s→%s] Reconnection failed after %d attempts; will retry on future sends",
+		c.clientID, r.ServerID, c.maxRetries)
 }
 
 func (c *client) calculateBackoffDelay(attempt int) time.Duration {
@@ -414,14 +344,14 @@ func (c *client) calculateBackoffDelay(attempt int) time.Duration {
 
 func (c *client) Close() {
 	log.Printf("[%s] Closing all connections", c.clientID)
-	for _, replica := range c.replicas {
-		replica.mu.Lock()
-		if replica.Conn != nil {
-			replica.Conn.Close()
-			replica.Conn = nil
-			replica.reader = nil
+	for _, r := range c.replicas {
+		r.mu.Lock()
+		if r.Conn != nil {
+			_ = r.Conn.Close()
+			r.Conn = nil
+			r.reader = nil
 		}
-		replica.IsHealthy = false
-		replica.mu.Unlock()
+		r.IsHealthy = false
+		r.mu.Unlock()
 	}
 }
