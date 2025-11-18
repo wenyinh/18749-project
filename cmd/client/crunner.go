@@ -10,6 +10,7 @@ import (
 	"github.com/wenyinh/18749-project/client"
 )
 
+// go run crunner.go -servers S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003 -id C1 -auto
 func main() {
 	servers := flag.String("servers", "S1=127.0.0.1:9001,S2=127.0.0.1:9002,S3=127.0.0.1:9003", "server addresses (format: ID1=addr1,ID2=addr2,...)")
 	clientID := flag.String("id", "C1", "client identifier")

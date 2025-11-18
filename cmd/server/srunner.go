@@ -7,6 +7,7 @@ import (
 	"github.com/wenyinh/18749-project/server"
 )
 
+// go run srunner.go -addr 0.0.0.0:9001 -rid S1
 func main() {
 	addr := flag.String("addr", ":9000", "server listen address, e.g. :9000 or 127.0.0.1:9000")
 	rid := flag.String("rid", "S1", "replica id for logs")

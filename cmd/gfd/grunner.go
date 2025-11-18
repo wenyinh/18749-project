@@ -8,6 +8,7 @@ import (
 	"github.com/wenyinh/18749-project/gfd"
 )
 
+// go run grunner.go -addr 0.0.0.0:8000
 func main() {
 	addr := flag.String("addr", ":8000", "GFD listen address")
 	hbFreq := flag.Duration("hb", 1*time.Second, "Heartbeat frequency for GFD->LFD")
