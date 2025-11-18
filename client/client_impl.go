@@ -13,11 +13,10 @@ import (
 )
 
 type RequestMessage struct {
-	Type        string `json:"type"`
-	ClientID    string `json:"client_id"`
-	RequestNum  int    `json:"request_num"`
-	Message     string `json:"message"`
-	GlobalState int    `json:"global_state"`
+	Type       string `json:"type"`
+	ClientID   string `json:"client_id"`
+	RequestNum int    `json:"request_num"`
+	Message    string `json:"message"`
 }
 
 type ResponseMessage struct {
@@ -34,8 +33,8 @@ type ReplicaConnection struct {
 	Addr     string
 
 	Conn      net.Conn
-	IsHealthy bool
 	reader    *bufio.Reader
+	IsHealthy bool
 
 	mu              sync.Mutex
 	reconnecting    bool
@@ -47,22 +46,21 @@ type client struct {
 
 	replicas []*ReplicaConnection
 
-	requestNum     int
-	maxRetries     int
-	baseDelay      time.Duration
-	mu             sync.Mutex
-	pendingReplies map[int]bool
-	replyMu        sync.Mutex
+	mu         sync.Mutex
+	requestNum int
 
-	globalState int
-	gsMu        sync.Mutex
+	maxRetries int
+	baseDelay  time.Duration
+
+	replyMu        sync.Mutex
+	pendingReplies map[int]bool
 }
 
 func NewClient(clientID string, serverAddrs map[string]string) Client {
 	replicas := make([]*ReplicaConnection, 0, len(serverAddrs))
-	for serverID, addr := range serverAddrs {
+	for sid, addr := range serverAddrs {
 		replicas = append(replicas, &ReplicaConnection{
-			ServerID:  serverID,
+			ServerID:  sid,
 			Addr:      addr,
 			IsHealthy: false,
 		})
@@ -71,25 +69,10 @@ func NewClient(clientID string, serverAddrs map[string]string) Client {
 	return &client{
 		clientID:       clientID,
 		replicas:       replicas,
-		requestNum:     0,
 		maxRetries:     5,
 		baseDelay:      time.Second,
 		pendingReplies: make(map[int]bool),
 	}
-}
-
-func (c *client) getGlobalState() int {
-	c.gsMu.Lock()
-	defer c.gsMu.Unlock()
-	return c.globalState
-}
-
-func (c *client) updateGlobalState(v int) {
-	c.gsMu.Lock()
-	if v > c.globalState {
-		c.globalState = v
-	}
-	c.gsMu.Unlock()
 }
 
 func (c *client) Connect() error {
@@ -98,19 +81,19 @@ func (c *client) Connect() error {
 	var wg sync.WaitGroup
 	errs := make([]error, len(c.replicas))
 
-	for i, replica := range c.replicas {
+	for i, r := range c.replicas {
 		wg.Add(1)
-		go func(idx int, r *ReplicaConnection) {
+		go func(idx int, rep *ReplicaConnection) {
 			defer wg.Done()
-			err := c.connectReplica(r)
+			err := c.connectReplica(rep)
 			errs[idx] = err
 			if err == nil {
-				log.Printf("[%s→%s] Connected successfully", c.clientID, r.ServerID)
+				log.Printf("[%s→%s] Connected successfully", c.clientID, rep.ServerID)
 			} else {
-				log.Printf("[%s→%s] Initial connection failed: %v", c.clientID, r.ServerID, err)
-				go c.attemptReconnect(r)
+				log.Printf("[%s→%s] Initial connection failed: %v", c.clientID, rep.ServerID, err)
+				go c.attemptReconnect(rep)
 			}
-		}(i, replica)
+		}(i, r)
 	}
 
 	wg.Wait()
@@ -142,20 +125,21 @@ func (c *client) connectReplica(r *ReplicaConnection) error {
 	r.Conn = conn
 	r.reader = bufio.NewReader(conn)
 	r.IsHealthy = true
+	r.permanentlyDown = false
 	return nil
 }
 
 func (c *client) activeReplicas() []*ReplicaConnection {
-	result := make([]*ReplicaConnection, 0, len(c.replicas))
+	res := make([]*ReplicaConnection, 0, len(c.replicas))
 	for _, r := range c.replicas {
 		r.mu.Lock()
 		down := r.permanentlyDown
 		r.mu.Unlock()
 		if !down {
-			result = append(result, r)
+			res = append(res, r)
 		}
 	}
-	return result
+	return res
 }
 
 func (c *client) SendMessage(message string) {
@@ -171,8 +155,7 @@ func (c *client) SendMessage(message string) {
 		return
 	}
 
-	log.Printf("[%s] Sending request_num=%d to %d replicas (global_state=%d)",
-		c.clientID, reqNum, len(targets), c.getGlobalState())
+	log.Printf("[%s] Sending request_num=%d to %d replicas", c.clientID, reqNum, len(targets))
 
 	responseChan := make(chan ResponseMessage, len(targets))
 	var wg sync.WaitGroup
@@ -185,6 +168,7 @@ func (c *client) SendMessage(message string) {
 		}(r)
 	}
 
+	// 等所有 goroutine 结束后关闭 channel
 	go func() {
 		wg.Wait()
 		close(responseChan)
@@ -192,9 +176,6 @@ func (c *client) SendMessage(message string) {
 
 	firstReply := true
 	for resp := range responseChan {
-		// 所有响应都用来更新 global_state
-		c.updateGlobalState(resp.ServerState)
-
 		c.replyMu.Lock()
 		if firstReply {
 			firstReply = false
@@ -236,11 +217,10 @@ func (c *client) sendToReplica(r *ReplicaConnection, reqNum int, msg string, ch 
 	r.mu.Unlock()
 
 	req := RequestMessage{
-		Type:        "REQ",
-		ClientID:    c.clientID,
-		RequestNum:  reqNum,
-		Message:     msg,
-		GlobalState: c.getGlobalState(),
+		Type:       "REQ",
+		ClientID:   c.clientID,
+		RequestNum: reqNum,
+		Message:    msg,
 	}
 
 	data, err := json.Marshal(req)
@@ -249,8 +229,7 @@ func (c *client) sendToReplica(r *ReplicaConnection, reqNum int, msg string, ch 
 		return
 	}
 
-	log.Printf("[%s→%s] Sending request_num=%d (global_state=%d)",
-		c.clientID, r.ServerID, reqNum, req.GlobalState)
+	log.Printf("[%s→%s] Sending request_num=%d", c.clientID, r.ServerID, reqNum)
 
 	if err := utils.WriteLine(conn, string(data)); err != nil {
 		log.Printf("[%s→%s] Error sending request: %v", c.clientID, r.ServerID, err)
@@ -274,7 +253,12 @@ func (c *client) sendToReplica(r *ReplicaConnection, reqNum int, msg string, ch 
 		return
 	}
 
-	ch <- resp
+	if resp.Type == "RESP" {
+		ch <- resp
+	} else {
+		log.Printf("[%s←%s] Unexpected response type=%s for request_num=%d",
+			c.clientID, r.ServerID, resp.Type, reqNum)
+	}
 }
 
 func (c *client) markUnhealthy(r *ReplicaConnection) {
@@ -330,8 +314,12 @@ func (c *client) attemptReconnect(r *ReplicaConnection) {
 		}
 	}
 
-	log.Printf("[%s→%s] Reconnection failed after %d attempts; will retry on future sends",
+	log.Printf("[%s→%s] Reconnection failed after %d attempts; marking permanently down",
 		c.clientID, r.ServerID, c.maxRetries)
+
+	r.mu.Lock()
+	r.permanentlyDown = true
+	r.mu.Unlock()
 }
 
 func (c *client) calculateBackoffDelay(attempt int) time.Duration {

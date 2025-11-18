@@ -34,12 +34,18 @@ type gfd struct {
 	lfdInfos    map[string]*lfdInfo // Map of LFD ID -> LFD info
 	hbFreq      time.Duration       // Heartbeat frequency for GFD->LFD
 	timeout     time.Duration       // Heartbeat timeout
-	mu          sync.Mutex
+
+	rmAddr string
+	rmConn net.Conn
+	rmMu   sync.Mutex
+
+	mu sync.Mutex
 }
 
-func NewGFD(addr string, hbFreq, timeout time.Duration) GFD {
+func NewGFD(addr, rmAddr string, hbFreq, timeout time.Duration) GFD {
 	return &gfd{
 		addr:        addr,
+		rmAddr:      rmAddr,
 		membership:  make([]string, 0),
 		memberCount: 0,
 		serverToLFD: make(map[string]string),
@@ -54,8 +60,11 @@ func (g *gfd) Run() error {
 	listener := utils.MustListen(g.addr)
 	log.Printf("[GFD] listening on %s, heartbeat freq=%s, timeout=%s", g.addr, g.hbFreq, g.timeout)
 
-	// Initial state
 	g.printMembership()
+
+	if g.rmAddr != "" {
+		go g.connectRM()
+	}
 
 	// Start heartbeat monitoring goroutine
 	go g.heartbeatMonitor()
@@ -132,15 +141,11 @@ func (g *gfd) handleConnection(conn net.Conn) {
 		}
 
 		// Handle ADD/DELETE commands
-		// ADD can be 2 or 3 parts: "ADD S1" or "ADD S1 LFD1"
-		// DELETE should be 3 parts: "DELETE S1 LFD1"
 		if command == "ADD" && len(parts) >= 2 {
 			serverID := parts[1]
-			// If LFD ID not provided in ADD message, use the registered LFD ID
 			if len(parts) == 3 {
 				lfdID = parts[2]
 			}
-			// Only add if we have a registered LFD for this connection
 			if info != nil && info.registered {
 				g.addReplica(serverID, info.lfdID)
 			} else {
@@ -166,16 +171,16 @@ func (g *gfd) handleConnection(conn net.Conn) {
 
 func (g *gfd) handleLFDDisconnection(lfdID string) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-
 	info, exists := g.lfdInfos[lfdID]
 	if !exists {
 		log.Printf("[GFD] LFD %s disconnected (not registered)", lfdID)
+		g.mu.Unlock()
 		return
 	}
 
 	serverID := info.serverID
 	delete(g.lfdInfos, lfdID)
+	g.mu.Unlock()
 
 	log.Printf("[GFD] LFD %s disconnected (was monitoring server %s), NOT removing server from membership", lfdID, serverID)
 }
@@ -204,7 +209,7 @@ func (g *gfd) heartbeatMonitor() {
 
 // sendHeartbeatToLFD sends a heartbeat to a specific LFD and checks for timeout
 func (g *gfd) sendHeartbeatToLFD(info *lfdInfo) {
-	// Check if last heartbeat response is too old
+	// snapshot
 	g.mu.Lock()
 	timeSinceLastHB := time.Since(info.lastHB)
 	lfdID := info.lfdID
@@ -235,7 +240,6 @@ func (g *gfd) sendHeartbeatToLFD(info *lfdInfo) {
 // handleLFDFailure is called when LFD fails to respond to heartbeats
 func (g *gfd) handleLFDFailure(lfdID string, serverID string) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 
 	// Remove LFD from tracking
 	delete(g.lfdInfos, lfdID)
@@ -259,17 +263,20 @@ func (g *gfd) handleLFDFailure(lfdID string, serverID string) {
 		log.Printf("[GFD] removed server %s from membership due to LFD %s failure", serverID, lfdID)
 		g.printMembershipLocked()
 	}
+	g.mu.Unlock()
+	g.sendMembersToRM()
 }
 
 func (g *gfd) addReplica(serverID string, lfdID string) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-
 	// Check if server already exists in membership
 	for _, member := range g.membership {
 		if member == serverID {
 			log.Printf("[GFD] server %s already in membership (monitored by LFD %s)", serverID, lfdID)
 			g.serverToLFD[serverID] = lfdID
+			g.printMembershipLocked()
+			g.mu.Unlock()
+			g.sendMembersToRM()
 			return
 		}
 	}
@@ -281,12 +288,13 @@ func (g *gfd) addReplica(serverID string, lfdID string) {
 
 	log.Printf("[GFD] added server %s to membership (monitored by LFD %s)", serverID, lfdID)
 	g.printMembershipLocked()
+	g.mu.Unlock()
+
+	g.sendMembersToRM()
 }
 
 func (g *gfd) deleteReplica(serverID string, lfdID string) {
 	g.mu.Lock()
-	defer g.mu.Unlock()
-
 	// Find and remove server from membership
 	found := false
 	newMembership := make([]string, 0, len(g.membership))
@@ -300,6 +308,7 @@ func (g *gfd) deleteReplica(serverID string, lfdID string) {
 
 	if !found {
 		log.Printf("[GFD] server %s not found in membership (DELETE request from LFD %s)", serverID, lfdID)
+		g.mu.Unlock()
 		return
 	}
 
@@ -309,12 +318,15 @@ func (g *gfd) deleteReplica(serverID string, lfdID string) {
 
 	log.Printf("[GFD] deleted server %s from membership (reported by LFD %s)", serverID, lfdID)
 	g.printMembershipLocked()
+	g.mu.Unlock()
+
+	g.sendMembersToRM()
 }
 
 func (g *gfd) printMembership() {
 	g.mu.Lock()
-	defer g.mu.Unlock()
 	g.printMembershipLocked()
+	g.mu.Unlock()
 }
 
 func (g *gfd) printMembershipLocked() {
@@ -327,5 +339,64 @@ func (g *gfd) printMembershipLocked() {
 	} else {
 		memberList := strings.Join(g.membership, ", ")
 		fmt.Printf("%sGFD: %d members: %s%s\n", red, g.memberCount, memberList, reset)
+	}
+}
+
+func (g *gfd) connectRM() {
+	for {
+		conn, err := net.Dial("tcp", g.rmAddr)
+		if err != nil {
+			log.Printf("[GFD] connect RM %s failed: %v, retry in 1s", g.rmAddr, err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		g.rmMu.Lock()
+		g.rmConn = conn
+		g.rmMu.Unlock()
+
+		log.Printf("[GFD] connected to RM at %s", g.rmAddr)
+
+		g.sendMembersToRM()
+
+		reader := bufio.NewReader(conn)
+		for {
+			if _, err := reader.ReadByte(); err != nil {
+				log.Printf("[GFD] RM connection closed: %v", err)
+				_ = conn.Close()
+				g.rmMu.Lock()
+				g.rmConn = nil
+				g.rmMu.Unlock()
+				break
+			}
+		}
+	}
+}
+
+func (g *gfd) sendMembersToRM() {
+	g.rmMu.Lock()
+	conn := g.rmConn
+	g.rmMu.Unlock()
+	if conn == nil {
+		return
+	}
+
+	// snapshot membership
+	g.mu.Lock()
+	members := append([]string(nil), g.membership...)
+	g.mu.Unlock()
+
+	line := "MEMBERS"
+	if len(members) > 0 {
+		line += " " + strings.Join(members, ",")
+	}
+
+	log.Printf("[GFD] send to RM: %s", line)
+	if err := utils.WriteLine(conn, line); err != nil {
+		log.Printf("[GFD] send MEMBERS to RM failed: %v", err)
+		g.rmMu.Lock()
+		_ = conn.Close()
+		g.rmConn = nil
+		g.rmMu.Unlock()
 	}
 }
