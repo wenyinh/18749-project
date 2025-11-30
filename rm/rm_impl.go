@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/wenyinh/18749-project/utils"
 )
@@ -25,6 +26,10 @@ type rm struct {
 
 	serverStates map[string]int
 
+	// Auto-recovery
+	gfdConn     net.Conn
+	autoRecover bool
+
 	mu sync.Mutex
 }
 
@@ -36,6 +41,7 @@ func NewRM(addr string, serverAddrs map[string]string) RM {
 		clients:      make(map[string]net.Conn),
 		servers:      make(map[string]net.Conn),
 		serverStates: make(map[string]int),
+		autoRecover:  true, // Enable auto-recovery by default
 	}
 }
 
@@ -91,8 +97,17 @@ func (r *rm) dispatch(conn net.Conn) {
 func (r *rm) handleGFD(conn net.Conn, reader *bufio.Reader, first string) {
 	defer func() {
 		log.Printf("[RM] GFD connection %s closed", conn.RemoteAddr())
+		r.mu.Lock()
+		r.gfdConn = nil
+		r.mu.Unlock()
 		conn.Close()
 	}()
+
+	// Save GFD connection for sending RECOVER commands
+	r.mu.Lock()
+	r.gfdConn = conn
+	r.mu.Unlock()
+
 	r.handleMembers(first)
 	for {
 		line, err := utils.ReadLine(reader)
@@ -241,6 +256,9 @@ func (r *rm) updateMembership(m []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	// Find failed servers before updating membership
+	failedServers := r.findFailedServersLocked(m)
+
 	r.membership = m
 	r.memberCount = len(m)
 
@@ -255,6 +273,14 @@ func (r *rm) updateMembership(m []string) {
 		}
 	}
 	r.reevaluatePrimaryLocked("membership")
+
+	// Trigger auto-recovery for failed servers
+	if len(failedServers) > 0 && r.autoRecover {
+		log.Printf("[RM] detected %d failed servers, triggering recovery...", len(failedServers))
+		for _, sid := range failedServers {
+			go r.recoverServer(sid)
+		}
+	}
 }
 
 func (r *rm) updateState(sid string, state int) {
@@ -376,4 +402,50 @@ func (r *rm) getStateLocked(sid string) int {
 		return st
 	}
 	return -1
+}
+
+func (r *rm) findFailedServersLocked(newMembership []string) []string {
+	// Build set of new members
+	newSet := make(map[string]struct{}, len(newMembership))
+	for _, sid := range newMembership {
+		newSet[sid] = struct{}{}
+	}
+
+	// Find servers that were in old membership but not in new
+	var failed []string
+	for _, sid := range r.membership {
+		if _, exists := newSet[sid]; !exists {
+			failed = append(failed, sid)
+		}
+	}
+	return failed
+}
+
+func (r *rm) recoverServer(sid string) {
+	// Wait for old process to exit
+	time.Sleep(2 * time.Second)
+
+	r.mu.Lock()
+	gfdConn := r.gfdConn
+	autoRecover := r.autoRecover
+	r.mu.Unlock()
+
+	if !autoRecover {
+		log.Printf("[RM] auto-recovery disabled, skipping recovery for %s", sid)
+		return
+	}
+
+	if gfdConn == nil {
+		log.Printf("[RM] no GFD connection, cannot recover server %s", sid)
+		return
+	}
+
+	recoverCmd := fmt.Sprintf("RECOVER %s", sid)
+	log.Printf("[RM] sending recovery command to GFD: %s", recoverCmd)
+
+	if err := utils.WriteLine(gfdConn, recoverCmd); err != nil {
+		log.Printf("[RM] failed to send RECOVER command for %s: %v", sid, err)
+	} else {
+		log.Printf("[RM] successfully sent RECOVER command for server %s", sid)
+	}
 }

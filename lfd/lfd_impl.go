@@ -6,6 +6,9 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/wenyinh/18749-project/utils"
@@ -20,6 +23,25 @@ const (
 	gfdPing  = "GFD_PING"
 	gfdPong  = "GFD_PONG"
 )
+
+// LFDConfig contains configuration for creating an LFD
+type LFDConfig struct {
+	LFDID      string
+	TargetAddr string
+	GFDAddr    string
+	HBFreq     time.Duration
+	Timeout    time.Duration
+	MaxRetries int
+	BaseDelay  time.Duration
+	MaxDelay   time.Duration
+
+	// Auto-recovery config
+	ServerID   string
+	ServerAddr string
+	RMAddr     string
+	Backups    string
+	CkptMs     int
+}
 
 type lfd struct {
 	lfdID          string // LFD's own ID
@@ -37,6 +59,13 @@ type lfd struct {
 	baseDelay      time.Duration
 	maxDelay       time.Duration
 	firstHeartbeat bool
+
+	// Auto-recovery fields
+	serverListenAddr string
+	rmAddr           string
+	backups          string
+	ckptMs           int
+	serverProcess    *exec.Cmd
 }
 
 func getServerID(lfdID string) string {
@@ -58,6 +87,33 @@ func NewLFD(lfdID, serverAddr, gfdAddr string, hbFreq, timeout time.Duration, ma
 		baseDelay:      baseDelay,
 		maxDelay:       maxDelay,
 		firstHeartbeat: true,
+	}
+}
+
+// NewLFDWithConfig creates a new LFD with full configuration for auto-recovery
+func NewLFDWithConfig(config LFDConfig) LFD {
+	serverID := config.ServerID
+	if serverID == "" {
+		serverID = getServerID(config.LFDID)
+	}
+
+	return &lfd{
+		lfdID:          config.LFDID,
+		serverID:       serverID,
+		serverAddr:     config.TargetAddr,
+		hbFreq:         config.HBFreq,
+		timeout:        config.Timeout,
+		gfdAddr:        config.GFDAddr,
+		maxRetries:     config.MaxRetries,
+		baseDelay:      config.BaseDelay,
+		maxDelay:       config.MaxDelay,
+		firstHeartbeat: true,
+
+		// Auto-recovery config
+		serverListenAddr: config.ServerAddr,
+		rmAddr:           config.RMAddr,
+		backups:          config.Backups,
+		ckptMs:           config.CkptMs,
 	}
 }
 
@@ -299,7 +355,30 @@ func (l *lfd) handleGFDHeartbeats() {
 			}
 			log.Printf("[LFD][%s] responded to GFD heartbeat with GFD_PONG", l.lfdID)
 		} else {
-			log.Printf("[LFD][%s] received unexpected message from GFD: %s", l.lfdID, line)
+			// Handle other commands (e.g., START)
+			parts := strings.Fields(line)
+			if len(parts) > 0 {
+				cmd := strings.ToUpper(parts[0])
+				switch cmd {
+				case "START":
+					// START S1
+					if len(parts) >= 2 {
+						serverID := parts[1]
+						if serverID == l.serverID {
+							log.Printf("[LFD][%s] Received START command from GFD for server %s", l.lfdID, serverID)
+							if err := l.startServer(); err != nil {
+								log.Printf("[LFD][%s] Failed to start server: %v", l.lfdID, err)
+							} else {
+								log.Printf("[LFD][%s] Server %s started successfully", l.lfdID, serverID)
+								// Reset first heartbeat flag so we can re-ADD to GFD
+								l.firstHeartbeat = true
+							}
+						}
+					}
+				default:
+					log.Printf("[LFD][%s] received unexpected message from GFD: %s", l.lfdID, line)
+				}
+			}
 		}
 	}
 }
@@ -330,4 +409,37 @@ func (l *lfd) resetConn() {
 
 func (l *lfd) lfdTag() string {
 	return fmt.Sprintf("LFD][%s->%s", l.lfdID, l.serverID)
+}
+
+// startServer starts the server process using configured parameters
+func (l *lfd) startServer() error {
+	// Check if we have the necessary configuration
+	if l.serverListenAddr == "" || l.rmAddr == "" {
+		return fmt.Errorf("missing server configuration (serverListenAddr or rmAddr)")
+	}
+
+	log.Printf("[LFD][%s] Starting server %s at %s", l.lfdID, l.serverID, l.serverListenAddr)
+
+	// Build the server start command
+	cmd := exec.Command("go", "run", "cmd/server/srunner.go",
+		"-rid", l.serverID,
+		"-addr", l.serverListenAddr,
+		"-rm", l.rmAddr,
+		"-backups", l.backups,
+		"-ckpt_ms", strconv.Itoa(l.ckptMs),
+	)
+
+	// Inherit stdout and stderr
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Start the process
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start server process: %w", err)
+	}
+
+	// Log the PID for manual management
+	log.Printf("[LFD][%s] ✅ Server %s restarted with PID %d", l.lfdID, l.serverID, cmd.Process.Pid)
+
+	return nil
 }

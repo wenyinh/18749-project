@@ -36,8 +36,9 @@ type gfd struct {
 	timeout     time.Duration       // Heartbeat timeout
 	mu          sync.Mutex
 
-	rmAddr string
-	rmConn net.Conn
+	rmAddr   string
+	rmConn   net.Conn
+	rmReader *bufio.Reader // Added for reading RM messages
 }
 
 func NewGFD(addr string, rmAddr string, hbFreq, timeout time.Duration) GFD {
@@ -363,8 +364,13 @@ func (g *gfd) connectRM() error {
 	}
 	g.mu.Lock()
 	g.rmConn = conn
+	g.rmReader = bufio.NewReader(conn)
 	g.mu.Unlock()
 	log.Printf("[GFD] connected to RM at %s", g.rmAddr)
+
+	// Start goroutine to handle RM commands
+	go g.handleRMCommands()
+
 	return nil
 }
 
@@ -388,5 +394,79 @@ func (g *gfd) notifyRM() {
 		log.Printf("[GFD] failed to notify RM (%q): %v", line, err)
 		_ = g.rmConn.Close()
 		g.rmConn = nil
+	}
+}
+
+// handleRMCommands reads and processes commands from RM (e.g., RECOVER)
+func (g *gfd) handleRMCommands() {
+	for {
+		g.mu.Lock()
+		reader := g.rmReader
+		g.mu.Unlock()
+
+		if reader == nil {
+			log.Printf("[GFD] RM reader is nil, stopping handleRMCommands")
+			return
+		}
+
+		line, err := utils.ReadLine(reader)
+		if err != nil {
+			log.Printf("[GFD] Lost connection to RM: %v", err)
+			g.mu.Lock()
+			g.rmConn = nil
+			g.rmReader = nil
+			g.mu.Unlock()
+			return
+		}
+
+		line = strings.TrimSpace(line)
+		parts := strings.Fields(line)
+
+		if len(parts) == 0 {
+			continue
+		}
+
+		cmd := strings.ToUpper(parts[0])
+
+		if cmd == "RECOVER" && len(parts) >= 2 {
+			serverID := parts[1]
+			g.handleRecoverCommand(serverID)
+			continue
+		}
+
+		log.Printf("[GFD] Unknown command from RM: %s", line)
+	}
+}
+
+// handleRecoverCommand forwards the START command to the appropriate LFD
+func (g *gfd) handleRecoverCommand(serverID string) {
+	g.mu.Lock()
+
+	// Find the LFD managing this server
+	lfdID, exists := g.serverToLFD[serverID]
+	if !exists {
+		log.Printf("[GFD] Cannot recover %s: no LFD mapping found", serverID)
+		g.mu.Unlock()
+		return
+	}
+
+	lfdInfo, exists := g.lfdInfos[lfdID]
+	if !exists || lfdInfo.conn == nil {
+		log.Printf("[GFD] Cannot recover %s: LFD %s not connected", serverID, lfdID)
+		g.mu.Unlock()
+		return
+	}
+
+	conn := lfdInfo.conn
+	g.mu.Unlock()
+
+	log.Printf("[GFD] Forwarding START command to LFD %s for server %s", lfdID, serverID)
+
+	// Send START command to LFD
+	startCmd := fmt.Sprintf("START %s", serverID)
+	if err := utils.WriteLine(conn, startCmd); err != nil {
+		log.Printf("[GFD] Failed to send START to LFD %s: %v", lfdID, err)
+	} else {
+		log.Printf("[GFD] Successfully sent START %s to LFD %s", serverID, lfdID)
 	}
 }
