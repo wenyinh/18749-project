@@ -154,9 +154,7 @@ func (l *lfd) sendOneHeartbeat() {
 			}
 			// If we HAD a connection before, this is a real failure
 			log.Printf("[LFD][%s] connect failed after retries; server %s appears to be down", l.lfdID, l.serverID)
-			l.notifyGFD("DELETE")
-			fmt.Printf("SERVER %s DOWN\n", l.serverID)
-			os.Exit(0)
+			l.handleServerDown("connect failed")
 		}
 	}
 
@@ -174,9 +172,7 @@ func (l *lfd) sendOneHeartbeat() {
 		if err := l.connectWithRetry(); err != nil {
 			log.Printf("[%s] [heartbeat_count=%d] Reconnection failed after retries  <-- DETECTED CRASH",
 				l.lfdTag(), l.heartbeatCnt)
-			l.notifyGFD("DELETE")
-			fmt.Printf("SERVER %s DOWN\n", l.serverID)
-			os.Exit(0)
+			l.handleServerDown("send failed")
 		}
 		return
 	}
@@ -197,9 +193,7 @@ func (l *lfd) sendOneHeartbeat() {
 		if err := l.connectWithRetry(); err != nil {
 			log.Printf("[%s] [heartbeat_count=%d] Reconnection failed after retries  <-- DETECTED CRASH",
 				l.lfdTag(), l.heartbeatCnt)
-			l.notifyGFD("DELETE")
-			fmt.Printf("SERVER %s DOWN\n", l.serverID)
-			os.Exit(0)
+			l.handleServerDown("recv failed")
 		}
 		return
 	}
@@ -222,9 +216,7 @@ func (l *lfd) sendOneHeartbeat() {
 		if err := l.connectWithRetry(); err != nil {
 			log.Printf("[%s] [heartbeat_count=%d] Reconnection failed after retries  <-- DETECTED CRASH",
 				l.lfdTag(), l.heartbeatCnt)
-			l.notifyGFD("DELETE")
-			fmt.Printf("SERVER %s DOWN\n", l.serverID)
-			os.Exit(0)
+			l.handleServerDown("unexpected reply")
 		}
 	}
 }
@@ -409,6 +401,19 @@ func (l *lfd) resetConn() {
 
 func (l *lfd) lfdTag() string {
 	return fmt.Sprintf("LFD][%s->%s", l.lfdID, l.serverID)
+}
+
+// handleServerDown notifies GFD and stays alive waiting for RM to restart the server
+func (l *lfd) handleServerDown(reason string) {
+	l.notifyGFD("DELETE")
+	fmt.Printf("SERVER %s DOWN\n", l.serverID)
+
+	// Reset state so future successful heartbeat will re-ADD
+	l.firstHeartbeat = true
+	l.conn = nil
+	l.reader = nil
+
+	log.Printf("[LFD][%s] server %s down (%s); waiting for RM to restart", l.lfdID, l.serverID, reason)
 }
 
 // startServer starts the server process using configured parameters

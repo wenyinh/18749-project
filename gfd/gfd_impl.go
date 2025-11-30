@@ -264,7 +264,6 @@ func (g *gfd) handleLFDFailure(lfdID string, serverID string) {
 	if found {
 		g.membership = newMembership
 		g.memberCount = len(g.membership)
-		delete(g.serverToLFD, serverID)
 
 		log.Printf("[GFD] removed server %s from membership due to LFD %s failure", serverID, lfdID)
 		g.printMembershipLocked()
@@ -326,7 +325,6 @@ func (g *gfd) deleteReplica(serverID string, lfdID string) {
 
 	g.membership = newMembership
 	g.memberCount = len(g.membership)
-	delete(g.serverToLFD, serverID)
 
 	log.Printf("[GFD] deleted server %s from membership (reported by LFD %s)", serverID, lfdID)
 	g.printMembershipLocked()
