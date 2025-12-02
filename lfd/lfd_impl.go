@@ -6,6 +6,10 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/wenyinh/18749-project/utils"
@@ -20,6 +24,24 @@ const (
 	gfdPing  = "GFD_PING"
 	gfdPong  = "GFD_PONG"
 )
+
+type LFDConfig struct {
+	LFDID      string
+	TargetAddr string
+	GFDAddr    string
+	HBFreq     time.Duration
+	Timeout    time.Duration
+	MaxRetries int
+	BaseDelay  time.Duration
+	MaxDelay   time.Duration
+
+	ServerID       string
+	ServerAddr     string
+	Backups        string
+	CkptMs         int
+	StartAsNewborn bool
+	InitState      int
+}
 
 type lfd struct {
 	lfdID          string // LFD's own ID
@@ -37,6 +59,14 @@ type lfd struct {
 	baseDelay      time.Duration
 	maxDelay       time.Duration
 	firstHeartbeat bool
+
+	serverListenAddr string
+	backups          string
+	ckptMs           int
+	startAsNewborn   bool
+	initState        int
+	procMu           sync.Mutex
+	serverProcess    *exec.Cmd
 }
 
 func getServerID(lfdID string) string {
@@ -47,17 +77,45 @@ func getServerID(lfdID string) string {
 }
 
 func NewLFD(lfdID, serverAddr, gfdAddr string, hbFreq, timeout time.Duration, maxRetries int, baseDelay, maxDelay time.Duration) LFD {
+	cfg := LFDConfig{
+		LFDID:      lfdID,
+		TargetAddr: serverAddr,
+		ServerAddr: serverAddr,
+		GFDAddr:    gfdAddr,
+		HBFreq:     hbFreq,
+		Timeout:    timeout,
+		MaxRetries: maxRetries,
+		BaseDelay:  baseDelay,
+		MaxDelay:   maxDelay,
+	}
+	return NewLFDWithConfig(cfg)
+}
+
+func NewLFDWithConfig(config LFDConfig) LFD {
+	serverID := config.ServerID
+	if serverID == "" {
+		serverID = getServerID(config.LFDID)
+	}
+	listenAddr := config.ServerAddr
+	if listenAddr == "" {
+		listenAddr = config.TargetAddr
+	}
 	return &lfd{
-		lfdID:          lfdID,              // LFD's own ID
-		serverID:       getServerID(lfdID), // Server ID to monitor
-		serverAddr:     serverAddr,
-		hbFreq:         hbFreq,
-		timeout:        timeout,
-		gfdAddr:        gfdAddr,
-		maxRetries:     maxRetries,
-		baseDelay:      baseDelay,
-		maxDelay:       maxDelay,
-		firstHeartbeat: true,
+		lfdID:            config.LFDID,
+		serverID:         serverID,
+		serverAddr:       config.TargetAddr,
+		hbFreq:           config.HBFreq,
+		timeout:          config.Timeout,
+		gfdAddr:          config.GFDAddr,
+		maxRetries:       config.MaxRetries,
+		baseDelay:        config.BaseDelay,
+		maxDelay:         config.MaxDelay,
+		firstHeartbeat:   true,
+		serverListenAddr: listenAddr,
+		backups:          config.Backups,
+		ckptMs:           config.CkptMs,
+		startAsNewborn:   config.StartAsNewborn,
+		initState:        config.InitState,
 	}
 }
 
@@ -90,60 +148,46 @@ func (l *lfd) Run() error {
 func (l *lfd) sendOneHeartbeat() {
 	if l.conn == nil {
 		if err := l.connectWithRetry(); err != nil {
-			// If we never had a successful connection (firstHeartbeat == true),
-			// then server hasn't started yet - just keep waiting
 			if l.firstHeartbeat {
 				log.Printf("[LFD][%s] server %s not available yet, waiting...", l.lfdID, l.serverID)
 				return
 			}
-			// If we HAD a connection before, this is a real failure
 			log.Printf("[LFD][%s] connect failed after retries; server %s appears to be down", l.lfdID, l.serverID)
-			l.notifyGFD("DELETE")
-			fmt.Printf("SERVER %s DOWN\n", l.serverID)
-			os.Exit(0)
+			l.handleServerDown("connect failed")
+			return
 		}
 	}
 
 	l.heartbeatCnt++
+	cyan := "\033[36m"
+	reset := "\033[0m"
 
-	// Send PING
 	_ = l.conn.SetWriteDeadline(time.Now().Add(l.timeout))
 	hb := ping
 	if err := utils.WriteLine(l.conn, hb); err != nil {
 		log.Printf("[%s] [heartbeat_count=%d] HEARTBEAT SEND FAILED to %s: %v",
 			l.lfdTag(), l.heartbeatCnt, l.serverAddr, err)
 		l.resetConn()
-
-		// Try to reconnect
 		if err := l.connectWithRetry(); err != nil {
 			log.Printf("[%s] [heartbeat_count=%d] Reconnection failed after retries  <-- DETECTED CRASH",
 				l.lfdTag(), l.heartbeatCnt)
-			l.notifyGFD("DELETE")
-			fmt.Printf("SERVER %s DOWN\n", l.serverID)
-			os.Exit(0)
+			l.handleServerDown("send failed")
 		}
 		return
 	}
-	cyan := "\033[36m"
-	reset := "\033[0m"
 	log.Printf("%s[%s] [heartbeat_count=%d] LFD->S send heartbeat: '%s'%s",
 		cyan, l.lfdTag(), l.heartbeatCnt, hb, reset)
 
-	// Expect PONG
 	_ = l.conn.SetReadDeadline(time.Now().Add(l.timeout))
 	line, err := utils.ReadLine(l.reader)
 	if err != nil {
 		log.Printf("[%s] [heartbeat_count=%d] HEARTBEAT RECV FAILED from server %s: %v",
 			l.lfdTag(), l.heartbeatCnt, l.serverID, err)
 		l.resetConn()
-
-		// Try to reconnect
 		if err := l.connectWithRetry(); err != nil {
 			log.Printf("[%s] [heartbeat_count=%d] Reconnection failed after retries  <-- DETECTED CRASH",
 				l.lfdTag(), l.heartbeatCnt)
-			l.notifyGFD("DELETE")
-			fmt.Printf("SERVER %s DOWN\n", l.serverID)
-			os.Exit(0)
+			l.handleServerDown("recv failed")
 		}
 		return
 	}
@@ -151,25 +195,20 @@ func (l *lfd) sendOneHeartbeat() {
 	if line == pong {
 		log.Printf("%s[%s] [heartbeat_count=%d] S->LFD recv heartbeat reply: '%s'%s",
 			cyan, l.lfdTag(), l.heartbeatCnt, line, reset)
-
-		// If this is the first successful heartbeat, notify GFD
 		if l.firstHeartbeat {
 			l.firstHeartbeat = false
 			l.notifyGFD("ADD")
 		}
-	} else {
-		log.Printf("[%s] [heartbeat_count=%d] UNEXPECTED REPLY '%s' (expected PONG)",
-			l.lfdTag(), l.heartbeatCnt, line)
-		l.resetConn()
+		return
+	}
 
-		// Try to reconnect
-		if err := l.connectWithRetry(); err != nil {
-			log.Printf("[%s] [heartbeat_count=%d] Reconnection failed after retries  <-- DETECTED CRASH",
-				l.lfdTag(), l.heartbeatCnt)
-			l.notifyGFD("DELETE")
-			fmt.Printf("SERVER %s DOWN\n", l.serverID)
-			os.Exit(0)
-		}
+	log.Printf("[%s] [heartbeat_count=%d] UNEXPECTED REPLY '%s' (expected PONG)",
+		l.lfdTag(), l.heartbeatCnt, line)
+	l.resetConn()
+	if err := l.connectWithRetry(); err != nil {
+		log.Printf("[%s] [heartbeat_count=%d] Reconnection failed after retries  <-- DETECTED CRASH",
+			l.lfdTag(), l.heartbeatCnt)
+		l.handleServerDown("unexpected reply")
 	}
 }
 
@@ -299,7 +338,27 @@ func (l *lfd) handleGFDHeartbeats() {
 			}
 			log.Printf("[LFD][%s] responded to GFD heartbeat with GFD_PONG", l.lfdID)
 		} else {
-			log.Printf("[LFD][%s] received unexpected message from GFD: %s", l.lfdID, line)
+			parts := strings.Fields(line)
+			if len(parts) == 0 {
+				continue
+			}
+			cmd := strings.ToUpper(parts[0])
+			switch cmd {
+			case "START":
+				if len(parts) >= 2 {
+					serverID := parts[1]
+					if serverID == l.serverID {
+						log.Printf("[LFD][%s] Received START command from GFD for server %s", l.lfdID, serverID)
+						if err := l.startServer(); err != nil {
+							log.Printf("[LFD][%s] Failed to start server: %v", l.lfdID, err)
+						} else {
+							l.firstHeartbeat = true
+						}
+					}
+				}
+			default:
+				log.Printf("[LFD][%s] received unexpected message from GFD: %s", l.lfdID, line)
+			}
 		}
 	}
 }
@@ -330,4 +389,78 @@ func (l *lfd) resetConn() {
 
 func (l *lfd) lfdTag() string {
 	return fmt.Sprintf("LFD][%s->%s", l.lfdID, l.serverID)
+}
+
+func (l *lfd) handleServerDown(reason string) {
+	l.notifyGFD("DELETE")
+	fmt.Printf("SERVER %s DOWN\n", l.serverID)
+	if l.conn != nil {
+		_ = l.conn.Close()
+	}
+	l.conn = nil
+	l.reader = nil
+	l.firstHeartbeat = true
+	log.Printf("[LFD][%s] server %s down (%s); waiting for RM to restart", l.lfdID, l.serverID, reason)
+}
+
+func (l *lfd) startServer() error {
+	if l.serverListenAddr == "" {
+		return fmt.Errorf("missing server listen address for %s", l.serverID)
+	}
+
+	l.procMu.Lock()
+	if l.serverProcess != nil && l.serverProcess.ProcessState == nil {
+		pid := l.serverProcess.Process.Pid
+		l.procMu.Unlock()
+		log.Printf("[LFD][%s] server process already running (PID %d)", l.lfdID, pid)
+		return nil
+	}
+	l.procMu.Unlock()
+
+	args := []string{
+		"run",
+		"cmd/server/srunner.go",
+		"-rid", l.serverID,
+		"-addr", l.serverListenAddr,
+		"-init_state", strconv.Itoa(l.initState),
+	}
+	if l.backups != "" {
+		args = append(args, "-backups", l.backups)
+	}
+	if l.ckptMs > 0 {
+		args = append(args, "-ckpt_ms", strconv.Itoa(l.ckptMs))
+	}
+	if l.startAsNewborn {
+		args = append(args, "-newborn")
+	}
+
+	cmd := exec.Command("go", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start server process: %w", err)
+	}
+
+	l.procMu.Lock()
+	l.serverProcess = cmd
+	l.procMu.Unlock()
+
+	log.Printf("[LFD][%s] ✅ Server %s restarted with PID %d", l.lfdID, l.serverID, cmd.Process.Pid)
+
+	go func(c *exec.Cmd, tag string) {
+		err := c.Wait()
+		if err != nil {
+			log.Printf("[LFD][%s] server process exited: %v", tag, err)
+		} else {
+			log.Printf("[LFD][%s] server process exited normally", tag)
+		}
+		l.procMu.Lock()
+		if l.serverProcess == c {
+			l.serverProcess = nil
+		}
+		l.procMu.Unlock()
+	}(cmd, l.lfdID)
+
+	return nil
 }

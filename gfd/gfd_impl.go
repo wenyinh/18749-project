@@ -180,6 +180,9 @@ func (g *gfd) handleLFDDisconnection(lfdID string) {
 
 	serverID := info.serverID
 	delete(g.lfdInfos, lfdID)
+	if cur, ok := g.serverToLFD[serverID]; ok && cur == lfdID {
+		delete(g.serverToLFD, serverID)
+	}
 	g.mu.Unlock()
 
 	log.Printf("[GFD] LFD %s disconnected (was monitoring server %s), NOT removing server from membership", lfdID, serverID)
@@ -314,7 +317,6 @@ func (g *gfd) deleteReplica(serverID string, lfdID string) {
 
 	g.membership = newMembership
 	g.memberCount = len(g.membership)
-	delete(g.serverToLFD, serverID)
 
 	log.Printf("[GFD] deleted server %s from membership (reported by LFD %s)", serverID, lfdID)
 	g.printMembershipLocked()
@@ -351,6 +353,8 @@ func (g *gfd) connectRM() {
 			continue
 		}
 
+		reader := bufio.NewReader(conn)
+
 		g.rmMu.Lock()
 		g.rmConn = conn
 		g.rmMu.Unlock()
@@ -359,17 +363,16 @@ func (g *gfd) connectRM() {
 
 		g.sendMembersToRM()
 
-		reader := bufio.NewReader(conn)
-		for {
-			if _, err := reader.ReadByte(); err != nil {
-				log.Printf("[GFD] RM connection closed: %v", err)
-				_ = conn.Close()
-				g.rmMu.Lock()
-				g.rmConn = nil
-				g.rmMu.Unlock()
-				break
-			}
+		if err := g.handleRMCommands(conn, reader); err != nil {
+			log.Printf("[GFD] RM connection closed: %v", err)
 		}
+
+		g.rmMu.Lock()
+		if g.rmConn == conn {
+			g.rmConn = nil
+		}
+		g.rmMu.Unlock()
+		_ = conn.Close()
 	}
 }
 
@@ -398,5 +401,56 @@ func (g *gfd) sendMembersToRM() {
 		_ = conn.Close()
 		g.rmConn = nil
 		g.rmMu.Unlock()
+	}
+}
+
+func (g *gfd) handleRMCommands(conn net.Conn, reader *bufio.Reader) error {
+	for {
+		line, err := utils.ReadLine(reader)
+		if err != nil {
+			return err
+		}
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Fields(line)
+		cmd := strings.ToUpper(parts[0])
+		switch cmd {
+		case "RECOVER":
+			if len(parts) < 2 {
+				log.Printf("[GFD] RECOVER command missing server ID: %q", line)
+				continue
+			}
+			serverID := parts[1]
+			log.Printf("[GFD] received RECOVER for %s from RM", serverID)
+			g.handleRecoverCommand(serverID)
+		default:
+			log.Printf("[GFD] unknown command from RM: %q", line)
+		}
+	}
+}
+
+func (g *gfd) handleRecoverCommand(serverID string) {
+	g.mu.Lock()
+	lfdID, ok := g.serverToLFD[serverID]
+	if !ok {
+		g.mu.Unlock()
+		log.Printf("[GFD] cannot recover %s: no LFD mapping", serverID)
+		return
+	}
+	info, exists := g.lfdInfos[lfdID]
+	if !exists || info.conn == nil {
+		g.mu.Unlock()
+		log.Printf("[GFD] cannot recover %s: LFD %s not connected", serverID, lfdID)
+		return
+	}
+	conn := info.conn
+	g.mu.Unlock()
+
+	cmd := fmt.Sprintf("START %s", serverID)
+	log.Printf("[GFD] send %q to LFD %s", cmd, lfdID)
+	if err := utils.WriteLine(conn, cmd); err != nil {
+		log.Printf("[GFD] failed to send START to LFD %s: %v", lfdID, err)
 	}
 }
