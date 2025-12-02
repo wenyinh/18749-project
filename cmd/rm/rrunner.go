@@ -7,7 +7,7 @@ import (
 	"github.com/wenyinh/18749-project/rm"
 )
 
-// go run rrunner.go -addr 0.0.0.0:8001
+// go run cmd/rm/rrunner.go -addr 127.0.0.1:8001
 func main() {
 	addr := flag.String("addr", ":8001", "RM listen address")
 	flag.Parse()

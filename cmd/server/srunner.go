@@ -9,10 +9,7 @@ import (
 	"github.com/wenyinh/18749-project/server"
 )
 
-// go run srunner.go -rid S1 -addr 0.0.0.0:9001 -init_state 0 -backups "S2=127.0.0.1:9002,S3=127.0.0.1:9003" -ckpt_ms 5000
-//
-// recover:
-// go run srunner.go -rid S2 -addr 0.0.0.0:9002 -init_state 0 -backups "S1=127.0.0.1:9001,S3=127.0.0.1:9003" -ckpt_ms 5000 -newborn
+// go run cmd/server/srunner.go -rid S1 -addr 127.0.0.1:9001 -init_state 0 -backups "S2=127.0.0.1:9002,S3=127.0.0.1:9003" -ckpt_ms 2000 -newborn
 func main() {
 	addr := flag.String("addr", ":9000", "server listen address, e.g. :9000 or 127.0.0.1:9000")
 	rid := flag.String("rid", "S1", "replica id for logs")

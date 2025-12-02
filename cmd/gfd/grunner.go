@@ -8,7 +8,7 @@ import (
 	"github.com/wenyinh/18749-project/gfd"
 )
 
-// go run grunner.go -addr 0.0.0.0:8000 -rm 127.0.0.1:8001
+// go run cmd/gfd/grunner.go -addr 127.0.0.1:8000 -rm 127.0.0.1:8001
 func main() {
 	addr := flag.String("addr", ":8000", "GFD listen address")
 	rmAddr := flag.String("rm", "127.0.0.1:8001", "RM address")

@@ -8,7 +8,7 @@ import (
 	"github.com/wenyinh/18749-project/lfd"
 )
 
-// go run lrunner.go -target 127.0.0.1:9001 -gfd 127.0.0.1:8000 -id LFD1
+// go run cmd/lfd/lrunner.go -target 127.0.0.1:9001 -id LFD1 -gfd 127.0.0.1:8000 -server-id S1 -server-addr 127.0.0.1:9001 -backups "S2=127.0.0.1:9002,S3=127.0.0.1:9003" -ckpt-ms 2000 -start-newborn -init-state 0
 func main() {
 	targetAddr := flag.String("target", "127.0.0.1:9000", "server address to monitor")
 	hb := flag.Duration("hb", 1*time.Second, "heartbeat frequency (e.g. 1s, 500ms)")
