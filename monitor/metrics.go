@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"time"
@@ -195,7 +196,9 @@ func RunCollection(ctx context.Context, opts CollectOptions) (MetricsSnapshot, e
 	defer cancel()
 
 	if opts.FaultType != "" {
-		startFaultInjection(collectionCtx, opts)
+		if _, _, err := LaunchFault(collectionCtx, opts.FaultType, opts.FaultDelay, opts.FaultDuration); err != nil {
+			log.Printf("[monitor] failed to launch fault %s: %v", opts.FaultType, err)
+		}
 	}
 
 	samples, err := collector.Collect(collectionCtx, opts.Duration)

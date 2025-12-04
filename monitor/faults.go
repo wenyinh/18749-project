@@ -12,19 +12,31 @@ import (
 	"time"
 )
 
-func startFaultInjection(ctx context.Context, opts CollectOptions) {
-	fault := strings.ToLower(strings.TrimSpace(opts.FaultType))
+// LaunchFault starts an artificial fault workload and returns a cancel function plus
+// a channel that closes when the injector stops (either because the context was
+// cancelled or the duration elapsed).
+func LaunchFault(ctx context.Context, faultType string, delay, duration time.Duration) (context.CancelFunc, <-chan struct{}, error) {
+	fault := strings.ToLower(strings.TrimSpace(faultType))
 	if fault == "" {
-		return
+		return nil, nil, fmt.Errorf("fault type is required")
 	}
 	switch fault {
-	case "cpu":
-		go runCPUHog(ctx, opts.FaultDelay, opts.FaultDuration)
-	case "memory":
-		go runMemoryPressure(ctx, opts.FaultDelay, opts.FaultDuration)
+	case "cpu", "memory":
 	default:
-		log.Printf("[monitor] unsupported fault type '%s'", opts.FaultType)
+		return nil, nil, fmt.Errorf("unsupported fault type %q", faultType)
 	}
+	childCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		switch fault {
+		case "cpu":
+			runCPUHog(childCtx, delay, duration)
+		case "memory":
+			runMemoryPressure(childCtx, delay, duration)
+		}
+	}()
+	return cancel, done, nil
 }
 
 func describeFault(opts CollectOptions) string {

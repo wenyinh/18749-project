@@ -157,6 +157,11 @@ func thresholds(stats MetricStats, sensitivity float64) (float64, float64) {
 	return stats.Mean + delta, stats.Mean - delta
 }
 
+// ThresholdBounds exposes the computed upper/lower thresholds for a metric.
+func ThresholdBounds(stats MetricStats, sensitivity float64) (float64, float64) {
+	return thresholds(stats, sensitivity)
+}
+
 func stddevsAway(val, mean, stddev float64) float64 {
 	if stddev <= 0 {
 		return 0

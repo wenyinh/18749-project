@@ -9,8 +9,9 @@ import (
 	"github.com/wenyinh/18749-project/monitor"
 )
 
+// go run ./cmd/monitor -mode serve -listen :8090
 func main() {
-	mode := flag.String("mode", "collect", "collect|baseline|detect")
+	mode := flag.String("mode", "collect", "collect|baseline|detect|serve")
 	interval := flag.Duration("interval", time.Second, "sampling interval for collection")
 	duration := flag.Duration("duration", 30*time.Second, "how long to collect metrics (collect mode)")
 	diskPath := flag.String("disk_path", "/", "disk path for usage stats")
@@ -23,6 +24,8 @@ func main() {
 	faultDelay := flag.Duration("fault_after", 0, "delay before triggering the fault (collect mode)")
 	faultDuration := flag.Duration("fault_duration", 0, "duration of the fault; 0=until collection ends")
 	reportPath := flag.String("report", "", "optional path to store anomaly report JSON (detect mode)")
+	listenAddr := flag.String("listen", ":8080", "address for serve mode UI")
+	historySamples := flag.Int("history_samples", 600, "number of samples to retain for serve mode")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -34,6 +37,8 @@ func main() {
 		runBaseline(*input, *baselinePath)
 	case "detect":
 		runDetect(*input, *baselinePath, *graphsDir, *reportPath, *sensitivity)
+	case "serve":
+		runServe(*interval, *diskPath, *baselinePath, *listenAddr, *historySamples, *sensitivity)
 	default:
 		log.Fatalf("unknown mode: %s", *mode)
 	}

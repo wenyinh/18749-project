@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Black-Box Failure Diagnosis</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <div>
+        <h1>Black-Box Failure Diagnosis</h1>
+        <p>
+          Collect OS-level CPU, memory, and disk metrics, compare them against a
+          baseline signature, and manually inject CPU / memory faults to see how
+          anomalies pop up in real time.
+        </p>
+      </div>
+      <div class="header-actions">
+        <span class="badge">Extra Credit Toolkit</span>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel" id="status-panel">
+        <div class="panel-header">Live Status</div>
+        <div class="status-grid">
+          <div class="status-card">
+            <span>Samples in window</span>
+            <strong id="sample-count">0</strong>
+          </div>
+          <div class="status-card">
+            <span>Sampling interval</span>
+            <strong id="sampling-interval">--</strong>
+          </div>
+          <div class="status-card">
+            <span>Disk path</span>
+            <strong id="disk-path">--</strong>
+          </div>
+          <div class="status-card">
+            <span>Baseline</span>
+            <strong id="baseline-info">none</strong>
+          </div>
+          <div class="status-card">
+            <span>Fault status</span>
+            <strong id="fault-info">idle</strong>
+          </div>
+          <div class="status-card">
+            <span>History depth</span>
+            <strong id="history-limit">--</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="control-panel">
+        <div class="panel-header">Controls</div>
+        <div class="panel-columns">
+          <div class="panel-card">
+            <h2>Baseline Builder</h2>
+            <p>
+              Capture "normal" behavior from the current sliding window to use as
+              the anomaly-detection signature.
+            </p>
+            <form id="baseline-form" class="form-grid">
+              <label>
+                Min samples
+                <input type="number" name="minSamples" min="10" value="60" />
+              </label>
+              <label>
+                Sensitivity (sigma multiplier)
+                <input
+                  type="number"
+                  name="sensitivity"
+                  min="0.5"
+                  step="0.1"
+                  value="3"
+                />
+              </label>
+              <button type="submit">Derive baseline</button>
+            </form>
+            <button id="clear-baseline" class="ghost">Clear baseline</button>
+            <div class="baseline-table-wrapper">
+              <table id="baseline-table">
+                <thead>
+                  <tr>
+                    <th>Metric</th>
+                    <th>Mean</th>
+                    <th>Std Dev</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel-card">
+            <h2>Fault Injection</h2>
+            <p>Trigger CPU / memory pressure to demonstrate fail-slow behavior.</p>
+            <form id="fault-form" class="form-grid">
+              <label>
+                Fault type
+                <select name="type">
+                  <option value="cpu">CPU Hog</option>
+                  <option value="memory">Memory Pressure</option>
+                </select>
+              </label>
+              <label>
+                Delay (seconds)
+                <input type="number" name="delay" min="0" value="5" />
+              </label>
+              <label>
+                Duration (seconds, 0 = until stopped)
+                <input type="number" name="duration" min="0" value="30" />
+              </label>
+              <button type="submit">Inject fault</button>
+            </form>
+            <button id="stop-fault" class="ghost">Stop fault</button>
+            <div class="fault-status" id="fault-status-text">No fault running</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">Metrics (Black-box instrumentation)</div>
+        <div id="chart-container" class="chart-grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">Detected anomalies</div>
+        <div class="table-wrapper">
+          <table id="anomaly-table">
+            <thead>
+              <tr>
+                <th>Metric</th>
+                <th>Time</th>
+                <th>Value</th>
+                <th>Threshold</th>
+                <th>Std devs away</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="/static/app.js" type="module"></script>
+  </body>
+</html>
