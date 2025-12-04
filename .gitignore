@@ -25,3 +25,4 @@ go.sum
 .DS_Store
 Thumbs.db
 test_deadlock_fix.sh
+.claude/settings.local.json
