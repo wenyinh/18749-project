@@ -377,7 +377,7 @@ const liveHTML = `<!DOCTYPE html>
       if (!svg) return;
       const width = svg.clientWidth || 600;
       const height = svg.clientHeight || 210;
-      const pad = 42;
+      const pad = 48;
       svg.setAttribute("viewBox", "0 0 " + width + " " + height);
       svg.innerHTML = "";
       if (!samples.length) return;
@@ -394,9 +394,33 @@ const liveHTML = `<!DOCTYPE html>
       const scaleX = t => pad + ((t - minT) / tRange) * (width - 2 * pad);
       const scaleY = v => (height - pad) - ((v - minV) / vRange) * (height - 2 * pad);
 
+      // Axes
       svg.innerHTML += '<line x1="' + pad + '" y1="' + (height - pad) + '" x2="' + (width - pad/2) + '" y2="' + (height - pad) + '" stroke="#1f2937" />';
       svg.innerHTML += '<line x1="' + pad + '" y1="' + (pad/2) + '" x2="' + pad + '" y2="' + (height - pad) + '" stroke="#1f2937" />';
 
+      // Grid + labels (Y)
+      const yTicks = 4;
+      for (let i = 0; i <= yTicks; i++) {
+        const frac = i / yTicks;
+        const v = minV + frac * vRange;
+        const y = scaleY(v).toFixed(2);
+        const col = i === 0 || i === yTicks ? "#1f2937" : "#111827";
+        svg.innerHTML += '<line x1="' + pad + '" y1="' + y + '" x2="' + (width - pad/2) + '" y2="' + y + '" stroke="' + col + '" stroke-dasharray="4 6" />';
+        svg.innerHTML += '<text x="' + (pad - 8) + '" y="' + (parseFloat(y) + 4) + '" font-size="10" fill="#94a3b8" text-anchor="end">' + v.toFixed(1) + unit + '</text>';
+      }
+
+      // Grid + labels (X)
+      const xTicks = 2;
+      for (let i = 0; i <= xTicks; i++) {
+        const frac = i / xTicks;
+        const t = minT + frac * tRange;
+        const x = scaleX(t).toFixed(2);
+        const col = i === 0 || i === xTicks ? "#1f2937" : "#111827";
+        svg.innerHTML += '<line x1="' + x + '" y1="' + (pad/2) + '" x2="' + x + '" y2="' + (height - pad) + '" stroke="' + col + '" stroke-dasharray="4 6" />';
+        svg.innerHTML += '<text x="' + x + '" y="' + (height - pad + 18) + '" font-size="10" fill="#94a3b8" text-anchor="middle">' + new Date(t).toLocaleTimeString() + '</text>';
+      }
+
+      // Data path
       const path = samples.map(function(s, idx) {
         const x = scaleX(new Date(s.timestamp).getTime()).toFixed(2);
         const y = scaleY(s[field]).toFixed(2);
@@ -404,6 +428,7 @@ const liveHTML = `<!DOCTYPE html>
       }).join(" ");
       svg.innerHTML += '<path d="' + path + '" fill="none" stroke="#38bdf8" stroke-width="2.2" />';
 
+      // Baseline bands
       if (baseStats && typeof baseStats.mean === "number") {
         const meanY = scaleY(baseStats.mean).toFixed(2);
         svg.innerHTML += '<line x1="' + pad + '" y1="' + meanY + '" x2="' + (width - pad/2) + '" y2="' + meanY + '" stroke="#22d3ee" stroke-dasharray="6 4" />';
@@ -414,17 +439,13 @@ const liveHTML = `<!DOCTYPE html>
         svg.innerHTML += '<line x1="' + pad + '" y1="' + upperY + '" x2="' + (width - pad/2) + '" y2="' + upperY + '" stroke="#f97316" stroke-dasharray="3 6" />';
       }
 
+      // Anomaly markers
       samples.forEach(function(s) {
         if (!s.anomaly) return;
         const x = scaleX(new Date(s.timestamp).getTime()).toFixed(2);
         const y = scaleY(s[field]).toFixed(2);
         svg.innerHTML += '<circle cx="' + x + '" cy="' + y + '" r="4" fill="#ef4444"><title>' + label + " " + s[field].toFixed(2) + unit + '\n' + (s.reasons||[]).join("; ") + '</title></circle>';
       });
-
-      const minLabel = new Date(minT).toLocaleTimeString();
-      const maxLabel = new Date(maxT).toLocaleTimeString();
-      svg.innerHTML += '<text x="' + pad + '" y="' + (height - pad + 16) + '" font-size="11" fill="#94a3b8">' + minLabel + '</text>';
-      svg.innerHTML += '<text x="' + (width - pad) + '" y="' + (height - pad + 16) + '" font-size="11" fill="#94a3b8" text-anchor="end">' + maxLabel + '</text>';
     }
 
     function renderAnomalies() {
