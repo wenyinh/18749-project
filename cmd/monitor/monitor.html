@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Black-Box Metrics Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #111827;
+      --accent: #22d3ee;
+      --accent-2: #a78bfa;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: 'Space Grotesk', 'Helvetica Neue', Arial, sans-serif;
+      background: radial-gradient(circle at 20% 20%, rgba(34, 211, 238, 0.08), transparent 35%),
+                  radial-gradient(circle at 80% 10%, rgba(167, 139, 250, 0.08), transparent 30%),
+                  var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 32px 20px 48px;
+    }
+    .shell {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    header {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 28px;
+      letter-spacing: -0.02em;
+    }
+    .subtitle {
+      color: var(--muted);
+      margin: 0;
+      font-size: 16px;
+    }
+    .panel {
+      background: linear-gradient(145deg, rgba(17, 24, 39, 0.9), rgba(15, 23, 42, 0.95));
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 16px;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+      padding: 18px 20px;
+    }
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+    .pill strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+    button {
+      border: none;
+      border-radius: 12px;
+      padding: 10px 16px;
+      background: linear-gradient(120deg, var(--accent), var(--accent-2));
+      color: #0b1021;
+      font-weight: 700;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: transform 0.12s ease, box-shadow 0.2s ease, filter 0.2s ease;
+      box-shadow: 0 12px 30px rgba(34, 211, 238, 0.25);
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+    button:hover:not(:disabled) {
+      transform: translateY(-1px);
+      filter: brightness(1.05);
+    }
+    canvas {
+      width: 100%;
+      height: 420px;
+    }
+    .legend {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 14px;
+      margin-top: 8px;
+    }
+    .legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 12px;
+      display: inline-block;
+    }
+    .readouts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .card {
+      padding: 12px 14px;
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .card .label {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .card .value {
+      font-weight: 700;
+      font-size: 20px;
+      letter-spacing: -0.01em;
+    }
+    .status {
+      font-weight: 600;
+      color: var(--text);
+    }
+    @media (max-width: 720px) {
+      canvas { height: 320px; }
+      body { padding: 24px 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1>Black-Box Failure Dashboard</h1>
+      <p class="subtitle">Live CPU / Memory / Disk metrics with a single CPU fault injection.</p>
+    </header>
+
+    <div class="panel">
+      <div class="controls">
+        <div class="pill">
+          <span>CPU Fault:</span>
+          <span class="status" id="fault-status">inactive</span>
+        </div>
+        <div class="pill">
+          <span>Next sample every <strong id="interval-label">1s</strong></span>
+        </div>
+        <button id="fault-btn">Inject CPU Fault</button>
+      </div>
+      <div class="pill" style="margin-bottom:10px;" id="baseline-pill">
+        <span>Baseline (first 10s avg): collecting...</span>
+      </div>
+
+      <div class="readouts">
+        <div class="card">
+          <div class="label">CPU</div>
+          <div class="value" id="cpu-val">--%</div>
+        </div>
+        <div class="card">
+          <div class="label">Memory</div>
+          <div class="value" id="mem-val">-- MB</div>
+        </div>
+        <div class="card">
+          <div class="label">Disk</div>
+          <div class="value" id="disk-val">--%</div>
+        </div>
+      </div>
+
+      <div class="legend" style="margin-top:6px;">
+        <span id="fault-hint"></span>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
+      <h3 style="margin:4px 0 10px 0;color:var(--muted);font-weight:500;">CPU Usage (%)</h3>
+      <canvas id="chart-cpu"></canvas>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
+      <h3 style="margin:4px 0 10px 0;color:var(--muted);font-weight:500;">Memory Usage (MB)</h3>
+      <canvas id="chart-mem"></canvas>
+    </div>
+
+    <div class="panel" style="margin-top:16px;">
+      <h3 style="margin:4px 0 10px 0;color:var(--muted);font-weight:500;">Disk Usage (%)</h3>
+      <canvas id="chart-disk"></canvas>
+    </div>
+  </div>
+
+  <script>
+    const cpuCtx = document.getElementById('chart-cpu').getContext('2d');
+    const memCtx = document.getElementById('chart-mem').getContext('2d');
+    const diskCtx = document.getElementById('chart-disk').getContext('2d');
+    const statusEl = document.getElementById('fault-status');
+    const hintEl = document.getElementById('fault-hint');
+    const faultBtn = document.getElementById('fault-btn');
+    const intervalLabel = document.getElementById('interval-label');
+    const cpuVal = document.getElementById('cpu-val');
+    const memVal = document.getElementById('mem-val');
+    const diskVal = document.getElementById('disk-val');
+    const baselinePill = document.getElementById('baseline-pill');
+
+    const cpuChart = new Chart(cpuCtx, {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: [{
+          label: 'CPU %',
+          data: [],
+          borderColor: '#22d3ee',
+          backgroundColor: 'rgba(34, 211, 238, 0.1)',
+          tension: 0.3,
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: true,
+        }]
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        scales: {
+          y: {
+            min: 0,
+            max: 100,
+            grid: { color: 'rgba(255,255,255,0.04)' },
+            ticks: { color: '#cbd5e1', callback: v => v + '%' }
+          },
+          x: {
+            grid: { display: false },
+            ticks: { color: '#cbd5e1', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 }
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${ctx.formattedValue}%`
+            }
+          }
+        }
+      }
+    });
+
+    const memChart = new Chart(memCtx, {
+      type: 'line',
+      data: { labels: [], datasets: [{
+        label: 'Memory MB',
+        data: [],
+        borderColor: '#a78bfa',
+        backgroundColor: 'rgba(167, 139, 250, 0.1)',
+        tension: 0.3,
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: true,
+      }]},
+      options: {
+        animation: false,
+        responsive: true,
+        scales: {
+          y: {
+            beginAtZero: true,
+            grid: { color: 'rgba(255,255,255,0.04)' },
+            ticks: { color: '#cbd5e1', callback: v => v + ' MB' }
+          },
+          x: { grid: { display: false }, ticks: { color: '#cbd5e1', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } }
+        },
+        plugins: { legend: { display: false } }
+      }
+    });
+
+    const diskChart = new Chart(diskCtx, {
+      type: 'line',
+      data: { labels: [], datasets: [{
+        label: 'Disk %',
+        data: [],
+        borderColor: '#f59e0b',
+        backgroundColor: 'rgba(245, 158, 11, 0.12)',
+        tension: 0.3,
+        borderWidth: 2,
+        pointRadius: 0,
+        fill: true,
+      }]},
+      options: {
+        animation: false,
+        responsive: true,
+        scales: {
+          y: { min: 0, max: 100, grid: { color: 'rgba(255,255,255,0.04)' }, ticks: { color: '#cbd5e1', callback: v => v + '%' } },
+          x: { grid: { display: false }, ticks: { color: '#cbd5e1', maxRotation: 0, autoSkip: true, maxTicksLimit: 8 } }
+        },
+        plugins: { legend: { display: false } }
+      }
+    });
+
+    async function fetchMetrics() {
+      const res = await fetch('/metrics');
+      const json = await res.json();
+      const samples = json.samples || [];
+
+      const labels = samples.map(s => new Date(s.ts).toLocaleTimeString());
+      cpuChart.data.labels = labels;
+      memChart.data.labels = labels;
+      diskChart.data.labels = labels;
+
+      cpuChart.data.datasets[0].data = samples.map(s => s.cpu?.toFixed ? Number(s.cpu.toFixed(2)) : s.cpu);
+      memChart.data.datasets[0].data = samples.map(s => s.mem_mb?.toFixed ? Number(s.mem_mb.toFixed(2)) : s.mem_mb);
+      diskChart.data.datasets[0].data = samples.map(s => s.disk?.toFixed ? Number(s.disk.toFixed(2)) : s.disk);
+
+      cpuChart.update('none');
+      memChart.update('none');
+      diskChart.update('none');
+
+      if (json.current) {
+        cpuVal.textContent = `${json.current.cpu?.toFixed ? json.current.cpu.toFixed(1) : json.current.cpu}%`;
+        memVal.textContent = `${json.current.mem_mb?.toFixed ? json.current.mem_mb.toFixed(1) : json.current.mem_mb} MB`;
+        diskVal.textContent = `${json.current.disk?.toFixed ? json.current.disk.toFixed(1) : json.current.disk}%`;
+      }
+
+      if (json.baseline) {
+        const cpuB = json.baseline.cpu?.toFixed ? json.baseline.cpu.toFixed(1) : json.baseline.cpu;
+        const memB = json.baseline.mem_mb?.toFixed ? json.baseline.mem_mb.toFixed(1) : json.baseline.mem_mb;
+        const diskB = json.baseline.disk?.toFixed ? json.baseline.disk.toFixed(1) : json.baseline.disk;
+        baselinePill.innerHTML = `<span>Baseline (first 10s avg): CPU ~${cpuB}% | Mem ~${memB} MB | Disk ~${diskB}%</span>`;
+      } else {
+        baselinePill.innerHTML = '<span>Baseline (first 10s avg): collecting...</span>';
+      }
+
+      if (json.fault_active) {
+        statusEl.textContent = 'active';
+        statusEl.style.color = '#22d3ee';
+        if (json.fault_ends_at) {
+          const ms = json.fault_ends_at - Date.now();
+          if (ms > 0) {
+            hintEl.textContent = `CPU fault ends in ${(ms / 1000).toFixed(1)}s`;
+          }
+        }
+      } else {
+        statusEl.textContent = 'inactive';
+        statusEl.style.color = 'var(--text)';
+        hintEl.textContent = 'Press the button to inject one CPU slowdown fault.';
+      }
+    }
+
+    async function triggerFault() {
+      faultBtn.disabled = true;
+      statusEl.textContent = 'starting...';
+      try {
+        await fetch('/fault', { method: 'POST' });
+        hintEl.textContent = 'CPU fault running... watch the spike.';
+      } catch (e) {
+        statusEl.textContent = 'failed';
+        console.error(e);
+      } finally {
+        setTimeout(() => { faultBtn.disabled = false; }, 800);
+      }
+    }
+
+    faultBtn.addEventListener('click', triggerFault);
+
+    fetchMetrics();
+    setInterval(fetchMetrics, 1000);
+  </script>
+</body>
+</html>
