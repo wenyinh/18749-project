@@ -9,8 +9,7 @@ import (
 	"github.com/wenyinh/18749-project/server"
 )
 
-// go run srunner.go -rid S1 -addr 0.0.0.0:9001 -init_state 0 -backups "S2=127.0.0.1:9002,S3=127.0.0.1:9003" -ckpt_ms 5000 -rm 127.0.0.1:8001
-// go run srunner.go -rid S2 -addr 0.0.0.0:9002 -init_state 0 -backups "S1=127.0.0.1:9001,S3=127.0.0.1:9003" -ckpt_ms 5000 -rm 127.0.0.1:8001
+// go run cmd/server/srunner.go -rid S1 -addr 0.0.0.0:9001 -init_state 0 -backups "S2=172.26.42.104:9002,S3=172.26.113.110:9003" -ckpt_ms 2000 -rm 172.26.12.248:8001
 func parseBackups(s string) map[string]string {
 	m := make(map[string]string)
 	if strings.TrimSpace(s) == "" {

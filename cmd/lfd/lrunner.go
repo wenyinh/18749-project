@@ -8,7 +8,7 @@ import (
 	"github.com/wenyinh/18749-project/lfd"
 )
 
-// go run lrunner.go -target 127.0.0.1:9001 -gfd 127.0.0.1:8000 -id LFD1 -server-id S1 -server-addr 0.0.0.0:9001 -rm 127.0.0.1:8001 -backups "S2=127.0.0.1:9002,S3=127.0.0.1:9003"
+// go run cmd/lfd/lrunner.go -target 127.0.0.1:9001 -gfd 172.26.12.248:8000 -id LFD1 -server-id S1 -server-addr 0.0.0.0:9001 -rm 172.26.12.248:8001 -backups "S2=172.26.42.104:9002,S3=172.26.113.110:9003"
 func main() {
 	// Original parameters
 	targetAddr := flag.String("target", "127.0.0.1:9000", "server address to monitor")
