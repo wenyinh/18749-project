@@ -18,8 +18,8 @@ run/
 *.swp
 *.swo
 
-# Go build cache
-go.sum
+# Go build caches
+.gocache/
 
 # OS files
 .DS_Store
