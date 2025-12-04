@@ -105,6 +105,12 @@ type Collector struct {
 	mu             sync.RWMutex
 }
 
+var (
+	diskMu       sync.Mutex
+	lastDiskTime time.Time
+	lastDiskIO   uint64
+)
+
 func NewCollector(start time.Time, baselineDuration time.Duration, threshold float64) *Collector {
 	until := start.Add(baselineDuration)
 	if baselineDuration <= 0 {
@@ -136,11 +142,7 @@ func CollectSample() (Sample, error) {
 		memMB = float64(vm.Used) / (1024.0 * 1024.0)
 	}
 
-	diskStat, err := disk.Usage("/")
-	diskPct := 0.0
-	if err == nil {
-		diskPct = diskStat.UsedPercent
-	}
+	diskPct := sampleDiskUtil(now)
 
 	return Sample{
 		Timestamp:   now,
@@ -149,6 +151,43 @@ func CollectSample() (Sample, error) {
 		MemUsedMB:   memMB,
 		DiskPercent: diskPct,
 	}, nil
+}
+
+// sampleDiskUtil estimates disk busy percentage using IO time deltas; falls back to usage% if counters unavailable.
+func sampleDiskUtil(now time.Time) float64 {
+	counters, err := disk.IOCounters()
+	if err == nil && len(counters) > 0 {
+		var totalIO uint64
+		for _, c := range counters {
+			totalIO += c.IoTime
+		}
+
+		diskMu.Lock()
+		defer diskMu.Unlock()
+
+		if !lastDiskTime.IsZero() {
+			deltaIO := totalIO - lastDiskIO
+			elapsed := now.Sub(lastDiskTime)
+			if elapsed > 0 {
+				util := (float64(deltaIO) / float64(elapsed.Milliseconds())) * 100.0
+				if util > 100 {
+					util = 100
+				}
+				lastDiskTime = now
+				lastDiskIO = totalIO
+				return util
+			}
+		}
+		lastDiskTime = now
+		lastDiskIO = totalIO
+	}
+
+	// Fallback: static disk used percent of root if IO counters are unavailable.
+	diskStat, err := disk.Usage("/")
+	if err == nil {
+		return diskStat.UsedPercent
+	}
+	return 0.0
 }
 
 // Process ingests a sample, updating baseline stats or marking anomalies.
@@ -291,12 +330,13 @@ func WriteJSON(path string, report Report) error {
 type FaultHandle struct {
 	cancel context.CancelFunc
 	kind   string
+	ctx    context.Context
 }
 
 // StartFault injects a synthetic slowdown fault (CPU busy loop or memory leak).
 func StartFault(kind string, duration time.Duration, memTargetMB int) *FaultHandle {
 	ctx, cancel := context.WithCancel(context.Background())
-	handle := &FaultHandle{cancel: cancel, kind: kind}
+	handle := &FaultHandle{cancel: cancel, kind: kind, ctx: ctx}
 
 	switch kind {
 	case "cpu":
@@ -328,6 +368,16 @@ func (f *FaultHandle) Stop() {
 	}
 }
 
+// Done exposes a channel that closes when the fault has been cancelled.
+func (f *FaultHandle) Done() <-chan struct{} {
+	if f == nil || f.ctx == nil {
+		ch := make(chan struct{})
+		close(ch)
+		return ch
+	}
+	return f.ctx.Done()
+}
+
 // CPU hog spins on all cores to inflate CPU usage.
 func startCPUHog(ctx context.Context) {
 	worker := func() {
@@ -357,6 +407,13 @@ func startMemoryPressure(ctx context.Context, targetMB int) {
 	block := make([][]byte, 0)
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	defer func() {
+		for i := range block {
+			block[i] = nil
+		}
+		block = nil
+		runtime.GC()
+	}()
 
 	for {
 		select {

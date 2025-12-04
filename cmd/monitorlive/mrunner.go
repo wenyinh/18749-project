@@ -82,6 +82,17 @@ func (f *faultManager) start(kind string, duration time.Duration, memMB int) (st
 	}
 	f.handle = handle
 	f.kind = kind
+	log.Printf("[monitor-live] injecting %s fault (duration=%v memMB=%d)", kind, duration, memMB)
+	// Clear handle when it completes on its own (duration elapsed or manual stop).
+	go func(h *monitor.FaultHandle) {
+		<-h.Done()
+		f.mu.Lock()
+		if f.handle == h {
+			f.handle = nil
+			f.kind = ""
+		}
+		f.mu.Unlock()
+	}(handle)
 	return fmt.Sprintf("%s fault running (duration=%v, memMB=%d)", kind, duration, memMB), nil
 }
 
@@ -90,6 +101,7 @@ func (f *faultManager) stop() string {
 	defer f.mu.Unlock()
 	if f.handle != nil {
 		f.handle.Stop()
+		log.Printf("[monitor-live] stop requested for %s fault", f.kind)
 		f.handle = nil
 		stopped := f.kind
 		f.kind = ""
