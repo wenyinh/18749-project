@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,12 @@ type streamEvent struct {
 type broadcaster struct {
 	mu   sync.Mutex
 	subs map[chan streamEvent]struct{}
+}
+
+type faultManager struct {
+	mu     sync.Mutex
+	handle *monitor.FaultHandle
+	kind   string
 }
 
 func newBroadcaster() *broadcaster {
@@ -61,14 +68,40 @@ func (b *broadcaster) publish(ev streamEvent) {
 	}
 }
 
+func (f *faultManager) start(kind string, duration time.Duration, memMB int) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.handle != nil {
+		f.handle.Stop()
+		f.handle = nil
+		f.kind = ""
+	}
+	handle := monitor.StartFault(kind, duration, memMB)
+	if handle == nil {
+		return "", fmt.Errorf("unknown fault kind: %s", kind)
+	}
+	f.handle = handle
+	f.kind = kind
+	return fmt.Sprintf("%s fault running (duration=%v, memMB=%d)", kind, duration, memMB), nil
+}
+
+func (f *faultManager) stop() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.handle != nil {
+		f.handle.Stop()
+		f.handle = nil
+		stopped := f.kind
+		f.kind = ""
+		return fmt.Sprintf("stopped %s fault", stopped)
+	}
+	return "no active fault to stop"
+}
+
 func main() {
 	interval := flag.Duration("interval", 2*time.Second, "sampling interval")
 	baseline := flag.Duration("baseline", 20*time.Second, "time window for learning baseline signature")
 	threshold := flag.Float64("threshold", 2.5, "stddev multiplier used for anomaly detection")
-	fault := flag.String("fault", "none", "inject a slowdown fault: none|cpu|mem")
-	faultAfter := flag.Duration("fault-after", 20*time.Second, "delay before injecting the fault")
-	faultDuration := flag.Duration("fault-duration", 30*time.Second, "duration of injected fault (0 means until shutdown)")
-	faultMem := flag.Int("fault-mem-mb", 512, "target memory footprint when fault=mem")
 	listen := flag.String("listen", ":8081", "address for live monitoring UI")
 	duration := flag.Duration("duration", 0, "optional total runtime (0 means run until Ctrl+C)")
 	flag.Parse()
@@ -79,6 +112,7 @@ func main() {
 	start := time.Now()
 	collector := monitor.NewCollector(start, *baseline, *threshold)
 	bcast := newBroadcaster()
+	fmgr := &faultManager{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -134,30 +168,6 @@ func main() {
 		}
 	}()
 
-	// Fault injection (optional).
-	go func() {
-		if *fault == "none" {
-			return
-		}
-		select {
-		case <-time.After(*faultAfter):
-			handle := monitor.StartFault(*fault, *faultDuration, *faultMem)
-			if handle == nil {
-				log.Printf("[monitor-live] unknown fault '%s', skipping", *fault)
-				return
-			}
-			if *faultDuration > 0 {
-				log.Printf("[monitor-live] injected %s fault for %v", *fault, *faultDuration)
-			} else {
-				log.Printf("[monitor-live] injected %s fault (until shutdown)", *fault)
-			}
-			<-ctx.Done()
-			handle.Stop()
-		case <-ctx.Done():
-			return
-		}
-	}()
-
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -192,6 +202,47 @@ func main() {
 			case <-r.Context().Done():
 				return
 			}
+		}
+	})
+
+	mux.HandleFunc("/fault", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			kind := r.FormValue("kind")
+			if kind == "" {
+				http.Error(w, "missing kind", http.StatusBadRequest)
+				return
+			}
+			durStr := r.FormValue("duration")
+			memStr := r.FormValue("mem_mb")
+
+			dur := 20 * time.Second
+			if durStr != "" {
+				if parsed, err := time.ParseDuration(durStr); err == nil {
+					dur = parsed
+				}
+			}
+			memMB := 512
+			if memStr != "" {
+				if parsed, err := strconv.Atoi(memStr); err == nil && parsed > 0 {
+					memMB = parsed
+				}
+			}
+			msg, err := fmgr.start(kind, dur, memMB)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			log.Printf("[monitor-live] %s", msg)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": msg})
+		case http.MethodDelete:
+			msg := fmgr.stop()
+			log.Printf("[monitor-live] %s", msg)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": msg})
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
 	})
 
@@ -231,6 +282,11 @@ const liveHTML = `<!DOCTYPE html>
     th { background: #0b162c; }
     tr:nth-child(even) { background: #0e1b32; }
     #status { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+    .actions { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    button { background: #1d4ed8; color: #e2e8f0; border: none; border-radius: 10px; padding: 8px 12px; cursor: pointer; font-weight: 600; }
+    button:hover { background: #2563eb; }
+    button.secondary { background: #334155; }
+    button.danger { background: #b91c1c; }
   </style>
 </head>
 <body>
@@ -239,6 +295,11 @@ const liveHTML = `<!DOCTYPE html>
     <span class="pill good" id="baseline-pill">Learning baseline...</span>
     <span class="pill good" id="threshold-pill">Threshold: --</span>
     <span class="pill bad" id="anomaly-pill" style="display:none">Anomaly detected</span>
+  </div>
+  <div class="actions">
+    <button onclick="triggerFault('cpu')" title="CPU hog for ~20s">Inject CPU Fault</button>
+    <button onclick="triggerFault('mem')" title="Allocates ~800MB for ~20s">Inject Memory Fault</button>
+    <button class="secondary" onclick="stopFault()">Stop Fault</button>
   </div>
   <div class="grid">
     <div class="card">
@@ -379,6 +440,26 @@ const liveHTML = `<!DOCTYPE html>
         const reasons = (s.reasons || []).join("; ");
         return "<tr><td>" + ts + "</td><td>" + reasons + "</td></tr>";
       }).join("");
+    }
+
+    function triggerFault(kind) {
+      const params = new URLSearchParams();
+      params.append("kind", kind);
+      if (kind === "mem") {
+        params.append("mem_mb", "800");
+      }
+      params.append("duration", "20s");
+      fetch("/fault", { method: "POST", body: params, headers: { "Content-Type": "application/x-www-form-urlencoded" } })
+        .then(r => r.json())
+        .then(res => console.log(res.status))
+        .catch(err => console.error(err));
+    }
+
+    function stopFault() {
+      fetch("/fault", { method: "DELETE" })
+        .then(r => r.json())
+        .then(res => console.log(res.status))
+        .catch(err => console.error(err));
     }
   </script>
 </body>
